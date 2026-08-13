@@ -1,1 +1,0 @@
-const opCode = enum { ReturnOp };

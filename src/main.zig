@@ -1,8 +1,9 @@
 const std = @import("std");
-const bc = @import("byteCode.zig");
+const bc = @import("bytecode.zig");
+const scan = @import("scanner.zig");
 const print = std.debug.print;
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var debugAllocator = std.heap.DebugAllocator(.{}){};
     const alloc = debugAllocator.allocator();
     defer {
@@ -12,14 +13,34 @@ pub fn main() !void {
         }
     }
 
-    var bcInfo: bc.ByteCodeInfo = bc.ByteCodeInfo.init(alloc);
-    defer bcInfo.deinit(alloc);
+    // REPL
+    var stdinBuf: [1024]u8 = undefined;
+    var stdinReader = std.Io.File.stdout().readerStreaming(
+        init.io,
+        &stdinBuf,
+    );
+    const stdin = &stdinReader.interface;
 
-    var pbcInfo: *bc.ByteCodeInfo = &bcInfo;
-    try pbcInfo.writeCode(alloc, 0, 1);
-    try pbcInfo.writeCode(alloc, 1, 1);
-    try pbcInfo.writeCode(alloc, 2, 1);
+    var stdoutBuf: [1024]u8 = undefined;
+    var stdoutWriter = std.Io.File.stdout().writerStreaming(init.io, &stdoutBuf);
+    var stdout = &stdoutWriter.interface;
+    defer stdout.flush() catch {};
 
-    bcInfo.printPretty("test");
+    while (true) {
+        try stdout.writeAll("|>> ");
+        try stdout.flush();
+
+        const line = try stdin.takeDelimiter('\n') orelse break;
+
+        if (line.len == 0) continue;
+
+        var scanner = scan.Scanner.init(line);
+        const tokenList = try scanner.scanTokens(alloc);
+
+        for (tokenList, 0..) |token, idx| {
+            try stdout.print("{d:>3}: {s:>12} at line {d:>3}, column: {d:>3} | {s}\n", .{ idx + 1, token.kind.toString(), token.line, token.column, token.getLexeme(line) });
+        }
+    }
+
     return;
 }
