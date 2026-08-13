@@ -36,6 +36,7 @@ pub fn main(init: std.process.Init) !void {
 
         var scanner = scan.Scanner.init(line);
         const tokenList = try scanner.scanTokens(alloc);
+        defer alloc.free(tokenList);
 
         for (tokenList, 0..) |token, idx| {
             try stdout.print("{d:>3}: {s:>12} at line {d:>3}, column: {d:>3} | {s}\n", .{ idx + 1, token.kind.toString(), token.line, token.column, token.getLexeme(line) });

@@ -19,8 +19,8 @@ const ScanErrorContext = struct {
     // error info
     errorType: ScanError = undefined,
     // position info
-    line: u32 = 0,
-    column: u32 = 0,
+    line: usize = 1,
+    column: usize = 1,
 
     fn setContext(self: *ScanErrorContext, scanner: *Scanner, err: ScanError) void {
         self.current = scanner.current - 1;
@@ -34,15 +34,15 @@ const ScanErrorContext = struct {
 pub const Scanner = struct {
     source: []const u8,
     current: usize,
-    line: u32,
-    column: u32,
+    line: usize,
+    column: usize,
 
     pub fn init(source: []const u8) Scanner {
         return .{
             .source = source,
             .current = 0,
-            .line = 0,
-            .column = 0,
+            .line = 1,
+            .column = 1,
         };
     }
 
@@ -95,6 +95,9 @@ pub const Scanner = struct {
                     };
                     return res;
                 }
+                if (ascii.isAlphabetic(c)) {
+                    return self.identifier();
+                }
                 context.setContext(self, ScanError.UnknownCharacter);
                 return ScanError.UnknownCharacter;
             },
@@ -141,13 +144,28 @@ pub const Scanner = struct {
         return ScanError.UnterminatedString;
     }
 
+    fn identifier(self: *Scanner) tokens.Token {
+        const start = self.current - 1;
+
+        while (self.peek()) |c| {
+            if (ascii.isAlphanumeric(c)) {
+                _ = self.advance();
+                continue;
+            }
+            break;
+        }
+        const end = self.current;
+        return self.makeToken(end - start, tokens.TokenType.Identifier);
+    }
+
     fn makeToken(self: *Scanner, length: usize, kind: tokens.TokenType) tokens.Token {
+        const checkString: usize = if (kind == .String) 1 else 0;
         return .{
             .kind = kind,
             .start = self.getStart(length),
             .length = length,
             .line = self.line,
-            .column = self.column,
+            .column = self.column - length - checkString,
         };
     }
 

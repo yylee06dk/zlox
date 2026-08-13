@@ -1,7 +1,7 @@
 const std = @import("std");
 const opCode = @import("opCode.zig");
 const Code = std.ArrayList(u8);
-const Line = std.ArrayList(u16);
+const Line = std.ArrayList(usize);
 const print = std.debug.print;
 const Allocator = std.mem.Allocator;
 
@@ -23,13 +23,13 @@ pub const ByteCodeInfo = struct {
         self.lineList.deinit(alloc);
     }
 
-    pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: u16) !void {
+    pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: usize) !void {
         try self.byteCodeList.append(alloc, code);
         try self.lineList.append(alloc, line);
     }
 
     pub fn printPretty(self: ByteCodeInfo, name: []const u8) void {
-        var prevLine: u16 = 0;
+        var prevLine: usize = 0;
         print("==== {s} ====\n", .{name});
         for (self.byteCodeList.items, 0..) |item, idx| {
             const curLine = self.lineList.items[idx];
