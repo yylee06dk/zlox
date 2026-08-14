@@ -1,11 +1,11 @@
 pub const bytecode = union(enum) {
     operation: opCode,
-    info: u8,
+    content: u8,
 
     pub fn isOperation(self: bytecode) bool {
         return switch (self) {
             .operation => true,
-            .info => false,
+            .content => false,
         };
     }
 };

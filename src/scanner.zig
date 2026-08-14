@@ -8,26 +8,28 @@ const Allocator = std.mem.Allocator;
 const ScanError = error{
     UnknownCharacter,
     UnterminatedString,
-    InvalidNumber,
 };
 
-const ScanErrorContext = struct {
-    // Source should be known
-    source: []const u8,
+pub const Diagnostic = struct {
     // byte info
-    current: usize = 0,
+    start: usize = 0,
+    length: usize = 0,
     // error info
     errorType: ScanError = undefined,
     // position info
     line: usize = 1,
     column: usize = 1,
 
-    fn setContext(self: *ScanErrorContext, scanner: *Scanner, err: ScanError) void {
-        self.current = scanner.current - 1;
-        self.source = scanner.source;
+    fn setContext(self: *Diagnostic, scanner: *Scanner, err: ScanError, length: usize) void {
+        self.start = scanner.current - length;
+        self.length = length;
         self.errorType = err;
         self.line = scanner.line;
-        self.column = scanner.column - 1;
+        self.column = scanner.column - length;
+    }
+
+    pub fn getLexeme(self: *const Diagnostic, source: []const u8) []const u8 {
+        return source[self.start .. self.start + self.length];
     }
 };
 
@@ -46,17 +48,17 @@ pub const Scanner = struct {
         };
     }
 
-    pub fn scanTokens(self: *Scanner, alloc: Allocator) ![]tokens.Token {
+    pub fn scanTokens(self: *Scanner, alloc: Allocator, diagnostics: *std.ArrayList(Diagnostic)) ![]tokens.Token {
         var tokenList: TokenList = .empty;
         errdefer tokenList.deinit(alloc);
-        var scanContext: ScanErrorContext = .{
-            .source = self.source,
-        };
 
+        var diagnostic: Diagnostic = Diagnostic{};
+
+        self.skipWhiteSpace();
         while (!self.isAtEnd()) {
-            const token = self.scanToken(&scanContext) catch |err| switch (err) {
-                ScanError.UnknownCharacter => null,
-                else => null,
+            const token = self.scanToken(&diagnostic) catch {
+                try diagnostics.append(alloc, diagnostic);
+                continue; // Error recorded, on to the next one!
             } orelse continue; // Skipping this one
 
             try tokenList.append(alloc, token);
@@ -68,8 +70,8 @@ pub const Scanner = struct {
         return try tokenList.toOwnedSlice(alloc);
     }
 
-    fn scanToken(self: *Scanner, context: *ScanErrorContext) ScanError!?tokens.Token {
-        self.skipWhiteSpace();
+    fn scanToken(self: *Scanner, context: *Diagnostic) ScanError!?tokens.Token {
+        defer self.skipWhiteSpace();
         const c = checkEnd: {
             if (!self.isAtEnd()) {
                 break :checkEnd self.advance();
@@ -90,7 +92,7 @@ pub const Scanner = struct {
                 }
                 if (c == '"') {
                     const res = self.string() catch |err| {
-                        context.setContext(self, err);
+                        context.setContext(self, err, 1); // TODO
                         return err;
                     };
                     return res;
@@ -98,7 +100,7 @@ pub const Scanner = struct {
                 if (ascii.isAlphabetic(c)) {
                     return self.identifier();
                 }
-                context.setContext(self, ScanError.UnknownCharacter);
+                context.setContext(self, ScanError.UnknownCharacter, 1);
                 return ScanError.UnknownCharacter;
             },
         }
