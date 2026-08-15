@@ -1,6 +1,6 @@
 const std = @import("std");
-const opCode = @import("opCode.zig");
-const Code = std.ArrayList(u8);
+const bc = @import("bytecode.zig");
+const Code = std.ArrayList(bc.bytecode);
 const Line = std.ArrayList(usize);
 const print = std.debug.print;
 const Allocator = std.mem.Allocator;
@@ -23,22 +23,35 @@ pub const ByteCodeInfo = struct {
         self.lineList.deinit(alloc);
     }
 
-    pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: usize) !void {
+    pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: bc.bytecode, line: usize) !void {
         try self.byteCodeList.append(alloc, code);
         try self.lineList.append(alloc, line);
     }
 
-    pub fn printPretty(self: ByteCodeInfo, name: []const u8) void {
-        var prevLine: usize = 0;
-        print("==== {s} ====\n", .{name});
-        for (self.byteCodeList.items, 0..) |item, idx| {
-            const curLine = self.lineList.items[idx];
-            if (curLine == prevLine) {
-                print("line:    |  {}\n", .{item});
-            } else {
-                prevLine = curLine;
-                print("line: {d:0>4}  {}\n", .{ self.lineList.items[idx], item });
-            }
+    pub fn printByteCodeList(self: ByteCodeInfo, name: []const u8, writer: *std.Io.Writer) !void {
+        var ip: usize = 0; // instruction pointer
+        var curLine: usize = 0;
+        try writer.print("==== {s} ====\n", .{name});
+        while (ip < self.byteCodeList.items.len) {
+            curLine = self.lineList.items[ip];
+            const offset = try self.printSingleInstruction(ip, writer, curLine);
+            ip += offset;
         }
+    }
+
+    fn printSingleInstruction(self: *const ByteCodeInfo, ip: usize, writer: *std.Io.Writer, curLine: usize) !usize {
+        if (!self.byteCodeList.items[ip].isOperation()) unreachable;
+        const curCode = self.byteCodeList.items[ip].operation;
+
+        var offset: usize = 0;
+        try writer.print("{d:0>4} | {d:>4} : ", .{ ip, curLine });
+        switch (curCode) {
+            .ReturnOp => {
+                offset = 1;
+                try writer.print("{s}\n", .{curCode.toString()});
+            },
+        }
+
+        return offset;
     }
 };

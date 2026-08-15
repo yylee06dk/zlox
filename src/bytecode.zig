@@ -15,7 +15,7 @@ pub const opCode = enum(u8) {
 
     pub fn toString(self: opCode) []const u8 {
         switch (self) {
-            .ReturnOp => "return",
+            .ReturnOp => return "return",
         }
     }
 };

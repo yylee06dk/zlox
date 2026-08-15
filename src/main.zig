@@ -1,4 +1,5 @@
 const std = @import("std");
+const bcInfo = @import("bytecodeInfo.zig");
 const bc = @import("bytecode.zig");
 const scan = @import("scanner.zig");
 const Allocator = std.mem.Allocator;
@@ -45,19 +46,10 @@ fn runFile(init: std.process.Init, path: []const u8) !void {
     var stdout = &stdoutWriter.interface;
     defer stdout.flush() catch {};
 
-    // Scanner init
-    var scanner = scan.Scanner.init(source);
-    var diagnosticList: std.ArrayList(scan.Diagnostic) = .empty;
-    const tokenList = try scanner.scanTokens(alloc, &diagnosticList);
-    defer alloc.free(tokenList);
-    defer diagnosticList.deinit(alloc);
-
-    scan.Scanner.printErrors(&diagnosticList, source);
-    try scan.Scanner.printResults(tokenList, source, stdout);
+    try run(init, source, stdout);
 }
 
 fn runREPL(init: std.process.Init) !void {
-    var alloc = init.gpa;
     // REPL
     var stdinBuf: [1024]u8 = undefined;
     var stdinReader = std.Io.File.stdin().readerStreaming(
@@ -85,13 +77,30 @@ fn runREPL(init: std.process.Init) !void {
 
         if (line.len == 0) continue; // Nothing given, but EOF not met
 
-        var scanner = scan.Scanner.init(line);
-        var diagnosticList: std.ArrayList(scan.Diagnostic) = .empty;
-        const tokenList = try scanner.scanTokens(alloc, &diagnosticList);
-        defer alloc.free(tokenList);
-        defer diagnosticList.deinit(alloc);
-
-        scan.Scanner.printErrors(&diagnosticList, line);
-        try scan.Scanner.printResults(tokenList, line, stdout);
+        try run(init, line, stdout);
     }
+}
+
+fn run(init: std.process.Init, source: []const u8, writer: *std.Io.Writer) !void {
+    var alloc = init.gpa;
+    // Scanner -- start
+    var scanner = scan.Scanner.init(source);
+    var diagnosticList: std.ArrayList(scan.Diagnostic) = .empty;
+    const tokenList = try scanner.scanTokens(alloc, &diagnosticList);
+    defer alloc.free(tokenList);
+    defer diagnosticList.deinit(alloc);
+
+    scan.Scanner.printErrors(&diagnosticList, source);
+    try scan.Scanner.printResults(tokenList, source, writer);
+    // Scanner -- end
+
+    // Bytecode testing
+    var bytecodeInfo = bcInfo.ByteCodeInfo.init();
+    defer bytecodeInfo.deinit(alloc);
+
+    try bytecodeInfo.writeCode(alloc, bc.bytecode{ .operation = .ReturnOp }, 1);
+    try bytecodeInfo.writeCode(alloc, bc.bytecode{ .operation = .ReturnOp }, 1);
+    try bytecodeInfo.writeCode(alloc, bc.bytecode{ .operation = .ReturnOp }, 1);
+
+    try bytecodeInfo.printByteCodeList("test", writer);
 }
