@@ -52,13 +52,8 @@ fn runFile(init: std.process.Init, path: []const u8) !void {
     defer alloc.free(tokenList);
     defer diagnosticList.deinit(alloc);
 
-    for (diagnosticList.items, 0..) |diagnostic, idx| {
-        print("{d:>3}: At line {d:>3}, column: {d:>3} | {} happened at {s}\n", .{ idx + 1, diagnostic.line, diagnostic.column, diagnostic.errorType, diagnostic.getLexeme(source) });
-    }
-
-    for (tokenList, 0..) |token, idx| {
-        try stdout.print("{d:>3}: {s:>12} at line {d:>3}, column: {d:>3} | {s}\n", .{ idx + 1, token.kind.toString(), token.line, token.column, token.getLexeme(source) });
-    }
+    scan.Scanner.printErrors(&diagnosticList, source);
+    try scan.Scanner.printResults(tokenList, source, stdout);
 }
 
 fn runREPL(init: std.process.Init) !void {
@@ -96,12 +91,7 @@ fn runREPL(init: std.process.Init) !void {
         defer alloc.free(tokenList);
         defer diagnosticList.deinit(alloc);
 
-        for (diagnosticList.items, 0..) |diagnostic, idx| {
-            print("{d:>3}: At line {d:>3}, column: {d:>3} | {} happened at {s}\n", .{ idx + 1, diagnostic.line, diagnostic.column, diagnostic.errorType, diagnostic.getLexeme(line) });
-        }
-
-        for (tokenList, 0..) |token, idx| {
-            try stdout.print("{d:>3}: {s:>12} at line {d:>3}, column: {d:>3} | {s}\n", .{ idx + 1, token.kind.toString(), token.line, token.column, token.getLexeme(line) });
-        }
+        scan.Scanner.printErrors(&diagnosticList, line);
+        try scan.Scanner.printResults(tokenList, line, stdout);
     }
 }

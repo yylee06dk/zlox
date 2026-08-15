@@ -1,5 +1,5 @@
 const std = @import("std");
-const t = std.debug.print;
+const print = std.debug.print;
 const tokens = @import("tokens.zig");
 const ascii = std.ascii;
 const TokenList = std.ArrayList(tokens.Token);
@@ -91,11 +91,12 @@ pub const Scanner = struct {
                     return self.number();
                 }
                 if (c == '"') {
-                    const res = self.string() catch |err| {
-                        context.setContext(self, err, 1); // TODO
+                    const res, const len = self.string();
+                    const token = res catch |err| {
+                        context.setContext(self, err, len);
                         return err;
                     };
-                    return res;
+                    return token;
                 }
                 if (ascii.isAlphabetic(c)) {
                     return self.identifier();
@@ -131,19 +132,19 @@ pub const Scanner = struct {
         return self.makeToken(end - start, tokens.TokenType.Number);
     }
 
-    fn string(self: *Scanner) ScanError!tokens.Token {
+    fn string(self: *Scanner) struct { ScanError!tokens.Token, usize } {
         const start = self.current; // Ignore the starting '"'
         while (self.peek()) |c| {
             if (c == '"') {
                 const token = self.makeToken(self.current - start, tokens.TokenType.String);
                 _ = self.advance(); // Consume the closing quote.
-                return token;
+                return .{ token, self.current - start };
             }
 
             _ = self.advance();
         }
 
-        return ScanError.UnterminatedString;
+        return .{ ScanError.UnterminatedString, self.current - start };
     }
 
     fn identifier(self: *Scanner) tokens.Token {
@@ -203,7 +204,7 @@ pub const Scanner = struct {
         const cur = self.source[self.current];
         if (cur == '\n') {
             self.line += 1;
-            self.column = 0;
+            self.column = 1;
         } else {
             self.column += 1;
         }
@@ -213,5 +214,21 @@ pub const Scanner = struct {
 
     fn isAtEnd(self: *const Scanner) bool {
         return self.source.len <= self.current;
+    }
+
+    // -------------------- Pretty Printing
+
+    pub fn printErrors(diagnosticList: *const std.ArrayList(Diagnostic), source: []const u8) void {
+        print("==== Scanning Errors ====\n", .{});
+        for (diagnosticList.items, 0..) |diagnostic, idx| {
+            print("{d:>3}: At line {d:>3}, column: {d:>3} | {} happened at {s}\n", .{ idx + 1, diagnostic.line, diagnostic.column, diagnostic.errorType, diagnostic.getLexeme(source) });
+        }
+    }
+
+    pub fn printResults(tokenList: []tokens.Token, source: []const u8, writer: *std.Io.Writer) !void {
+        print("==== Scan Results ====\n", .{});
+        for (tokenList, 0..) |token, idx| {
+            try writer.print("{d:>3}: {s:>12} at line {d:>3}, column: {d:>3} | {s}\n", .{ idx + 1, token.kind.toString(), token.line, token.column, token.getLexeme(source) });
+        }
     }
 };

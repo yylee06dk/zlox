@@ -38,6 +38,7 @@ pub const Token = struct {
         if (self.kind == .EOF) {
             return "EOF";
         }
-        return source[self.start .. self.start + self.length];
+        const checkString: usize = if (self.kind == .String) 1 else 0;
+        return source[self.start - checkString .. self.start + self.length + checkString];
     }
 };
