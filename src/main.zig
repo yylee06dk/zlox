@@ -84,23 +84,33 @@ fn runREPL(init: std.process.Init) !void {
 fn run(init: std.process.Init, source: []const u8, writer: *std.Io.Writer) !void {
     var alloc = init.gpa;
     // Scanner -- start
-    var scanner = scan.Scanner.init(source);
     var diagnosticList: std.ArrayList(scan.Diagnostic) = .empty;
-    const tokenList = try scanner.scanTokens(alloc, &diagnosticList);
-    defer alloc.free(tokenList);
     defer diagnosticList.deinit(alloc);
 
+    var scanner = scan.Scanner.init(source);
+    const tokenList = try scanner.scanTokens(alloc, &diagnosticList);
+    defer alloc.free(tokenList);
+
+    // Debugging
     scan.Scanner.printErrors(&diagnosticList, source);
     try scan.Scanner.printResults(tokenList, source, writer);
     // Scanner -- end
+
+    // the pipeline
+    //
+    // const bcInfo = compiler.compile(tokenList); --> Suppose errors are well dealt with
+    // var virtualMachine = vm.VM.init(&bcInfo, false); -> ownership of bcInfo moves from this function to the VM instance
+    // defer virtualMachine.deinit(alloc);
+    //
+    // try virtualMachine.run(); -> where all the magic happens.
 
     // Bytecode testing
     var bytecodeInfo = bcInfo.ByteCodeInfo.init();
     defer bytecodeInfo.deinit(alloc);
 
-    try bytecodeInfo.writeCode(alloc, bc.bytecode{ .operation = .ReturnOp }, 1);
-    try bytecodeInfo.writeCode(alloc, bc.bytecode{ .operation = .ReturnOp }, 1);
-    try bytecodeInfo.writeCode(alloc, bc.bytecode{ .operation = .ReturnOp }, 1);
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ReturnOp), 1);
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ReturnOp), 1);
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ReturnOp), 1);
 
     try bytecodeInfo.printByteCodeList("test", writer);
 }

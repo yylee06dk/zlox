@@ -1,6 +1,6 @@
 const std = @import("std");
 const bc = @import("bytecode.zig");
-const Code = std.ArrayList(bc.bytecode);
+const Code = std.ArrayList(u8);
 const Line = std.ArrayList(usize);
 const print = std.debug.print;
 const Allocator = std.mem.Allocator;
@@ -23,7 +23,7 @@ pub const ByteCodeInfo = struct {
         self.lineList.deinit(alloc);
     }
 
-    pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: bc.bytecode, line: usize) !void {
+    pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: usize) !void {
         try self.byteCodeList.append(alloc, code);
         try self.lineList.append(alloc, line);
     }
@@ -40,8 +40,7 @@ pub const ByteCodeInfo = struct {
     }
 
     fn printSingleInstruction(self: *const ByteCodeInfo, ip: usize, writer: *std.Io.Writer, curLine: usize) !usize {
-        if (!self.byteCodeList.items[ip].isOperation()) unreachable;
-        const curCode = self.byteCodeList.items[ip].operation;
+        const curCode: bc.opCode = @enumFromInt(self.byteCodeList.items[ip]);
 
         var offset: usize = 0;
         try writer.print("{d:0>4} | {d:>4} : ", .{ ip, curLine });
