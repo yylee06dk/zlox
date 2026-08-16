@@ -1,7 +1,10 @@
 const std = @import("std");
 const bcInfo = @import("bytecodeInfo.zig");
 const bc = @import("bytecode.zig");
+const vm = @import("vm.zig");
 const scan = @import("scanner.zig");
+const values = @import("values.zig");
+
 const Allocator = std.mem.Allocator;
 const print = std.debug.print;
 
@@ -92,15 +95,16 @@ fn run(init: std.process.Init, source: []const u8, writer: *std.Io.Writer) !void
     defer alloc.free(tokenList);
 
     // Debugging
-    scan.Scanner.printErrors(&diagnosticList, source);
+    if (diagnosticList.items.len != 0) {
+        scan.Scanner.printErrors(&diagnosticList, source);
+    }
     try scan.Scanner.printResults(tokenList, source, writer);
     // Scanner -- end
 
     // the pipeline
     //
     // const bcInfo = compiler.compile(tokenList); --> Suppose errors are well dealt with
-    // var virtualMachine = vm.VM.init(&bcInfo, false); -> ownership of bcInfo moves from this function to the VM instance
-    // defer virtualMachine.deinit(alloc);
+    // var virtualMachine = vm.VM.init(&bcInfo, false); -> ownership of bcInfo stays in the scope of `run` function
     //
     // try virtualMachine.run(); -> where all the magic happens.
 
@@ -109,8 +113,30 @@ fn run(init: std.process.Init, source: []const u8, writer: *std.Io.Writer) !void
     defer bytecodeInfo.deinit(alloc);
 
     try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ReturnOp), 1);
-    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ReturnOp), 1);
-    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ReturnOp), 1);
+
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ConstantOp), 2);
+    const item = values.Value{ .number = 1.2 };
+    const addr = try bytecodeInfo.addConstant(alloc, item);
+    if (addr > std.math.maxInt(u8)) {
+        unreachable; // Need to be changed! -- After implementing compiler step
+    }
+    try bytecodeInfo.writeCode(alloc, @intCast(addr), 2);
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ReturnOp), 3);
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.NegateOp), 4);
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ReturnOp), 5);
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ConstantOp), 5);
+    const item2 = values.Value{ .number = 1.3 };
+    const addr2 = try bytecodeInfo.addConstant(alloc, item2);
+    if (addr2 > std.math.maxInt(u8)) {
+        unreachable; // Need to be changed! -- After implementing compiler step
+    }
+    try bytecodeInfo.writeCode(alloc, @intCast(addr2), 7);
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.AddOp), 5);
+    try bytecodeInfo.writeCode(alloc, @intFromEnum(bc.opCode.ReturnOp), 5);
+
+    // VM -- start
+    var VM = vm.VM.init(&bytecodeInfo, true);
+    try VM.execute(writer);
 
     try bytecodeInfo.printByteCodeList("test", writer);
 }

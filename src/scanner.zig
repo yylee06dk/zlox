@@ -226,7 +226,7 @@ pub const Scanner = struct {
     }
 
     pub fn printResults(tokenList: []tokens.Token, source: []const u8, writer: *std.Io.Writer) !void {
-        print("==== Scan Results ====\n", .{});
+        try writer.print("==== Scan Results ====\n", .{});
         for (tokenList, 0..) |token, idx| {
             try writer.print("{d:>3}: {s:>12} at line {d:>3}, column: {d:>3} | {s}\n", .{ idx + 1, token.kind.toString(), token.line, token.column, token.getLexeme(source) });
         }
