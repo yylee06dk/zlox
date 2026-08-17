@@ -38,7 +38,7 @@ pub const VM = struct {
                 },
                 .ConstantOp => {
                     try writer.print("{d:0>4} | constant: ", .{self.ip - 1});
-                    const valueAddr = self.byteCodeInfo.byteCodeList.items[self.advance()];
+                    const valueAddr = self.advance();
                     const value = self.byteCodeInfo.constantList.items[valueAddr];
                     try self.stack.push(value);
                     if (self.debugFlag) {

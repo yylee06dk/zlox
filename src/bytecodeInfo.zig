@@ -7,6 +7,8 @@ const Values = std.ArrayList(values.Value);
 const print = std.debug.print;
 const Allocator = std.mem.Allocator;
 
+const t = std.debug.print;
+
 pub const ByteCodeInfo = struct {
     // Struct fields
     byteCodeList: Code,

@@ -1,4 +1,6 @@
+const std = @import("std");
 const values = @import("values.zig");
+
 pub const TokenType = enum {
     Number,
     String,

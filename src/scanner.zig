@@ -70,7 +70,7 @@ pub const Scanner = struct {
         return try tokenList.toOwnedSlice(alloc);
     }
 
-    fn scanToken(self: *Scanner, context: *Diagnostic) ScanError!?tokens.Token {
+    pub fn scanToken(self: *Scanner, context: *Diagnostic) ScanError!?tokens.Token {
         defer self.skipWhiteSpace();
         const c = checkEnd: {
             if (!self.isAtEnd()) {
