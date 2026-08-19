@@ -97,7 +97,7 @@ pub const VM = struct {
                 },
                 .MultOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | add: ", .{self.ip - 1});
+                        try writer.print("{d:0>4} | mult: ", .{self.ip - 1});
                     }
                     const rValue = self.stack.pop() orelse return VMError.CompileErr;
                     const lValue = self.stack.pop() orelse return VMError.CompileErr;
@@ -113,7 +113,7 @@ pub const VM = struct {
                 },
                 .DivOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | add: ", .{self.ip - 1});
+                        try writer.print("{d:0>4} | div: ", .{self.ip - 1});
                     }
                     const rValue = self.stack.pop() orelse return VMError.CompileErr;
                     const lValue = self.stack.pop() orelse return VMError.CompileErr;
