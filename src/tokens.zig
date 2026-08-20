@@ -11,6 +11,9 @@ pub const TokenType = enum {
     Slash,
     LeftParen,
     RightParen,
+    True,
+    False,
+    Nil,
     EOF,
 
     pub fn toString(self: TokenType) []const u8 {
@@ -24,6 +27,9 @@ pub const TokenType = enum {
             .Slash => "slash",
             .LeftParen => "left paren",
             .RightParen => "right paren",
+            .True => "true",
+            .False => "false",
+            .Nil => "<nil>",
             .EOF => "EOF",
         };
     }

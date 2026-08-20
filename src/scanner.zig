@@ -157,8 +157,27 @@ pub const Scanner = struct {
             }
             break;
         }
-        const end = self.current;
-        return self.makeToken(end - start, tokens.TokenType.Identifier);
+        const length = self.current - start;
+        // Check if keyword
+        switch (self.source[start]) {
+            't' => if (self.checkRest("rue", start, length)) return self.makeToken(length, tokens.TokenType.True),
+            'f' => if (self.checkRest("alse", start, length)) return self.makeToken(length, tokens.TokenType.False),
+            'n' => if (self.checkRest("il", start, length)) return self.makeToken(length, tokens.TokenType.Nil),
+            else => {},
+        }
+        return self.makeToken(length, tokens.TokenType.Identifier);
+    }
+
+    fn checkRest(self: *Scanner, rest: []const u8, start: usize, length: usize) bool {
+        var i: usize = 1;
+        for (rest) |c| {
+            if (i >= length) return false;
+            if (c != self.source[start + i]) {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
     }
 
     fn makeToken(self: *Scanner, length: usize, kind: tokens.TokenType) tokens.Token {

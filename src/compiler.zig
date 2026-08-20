@@ -32,6 +32,9 @@ pub const Rule = struct {
 };
 
 const ruleTable: std.enums.EnumArray(tokens.TokenType, Rule) = .initDefault(.{}, .{
+    .True = .{ .prefix = Compiler.literal },
+    .False = .{ .prefix = Compiler.literal },
+    .Nil = .{ .prefix = Compiler.literal },
     .Number = .{ .prefix = Compiler.number },
     .Plus = .{ .infix = Compiler.binary, .prec = .Term },
     .Minus = .{ .prefix = Compiler.unary, .infix = Compiler.binary, .prec = .Term },
@@ -139,6 +142,24 @@ pub const Compiler = struct {
     }
 
     // ------------ Parsing functions -------------
+    fn literal(self: *Compiler, alloc: Allocator) !void {
+        switch (self.previous.kind) {
+            .True => {
+                const value = values.Value{ .boolean = true };
+                try self.writeConstant(alloc, value);
+            },
+            .False => {
+                const value = values.Value{ .boolean = false };
+                try self.writeConstant(alloc, value);
+            },
+            .Nil => {
+                const value = values.Value{ .nil = 1 };
+                try self.writeConstant(alloc, value);
+            },
+            else => unreachable,
+        }
+    }
+
     fn number(self: *Compiler, alloc: Allocator) !void {
         const lexeme = self.previous.getLexeme(self.source);
         const num = std.fmt.parseFloat(f64, lexeme) catch unreachable;
