@@ -3,6 +3,8 @@ const tokens = @import("tokens.zig");
 const bc = @import("bytecode.zig");
 const bcInfo = @import("bytecodeInfo.zig");
 const values = @import("values.zig");
+const strings = @import("strings.zig");
+const memory = @import("memory.zig");
 
 const Allocator = std.mem.Allocator;
 const RuleErrorUnion = Allocator.Error || CompileError;
@@ -36,6 +38,7 @@ const ruleTable: std.enums.EnumArray(tokens.TokenType, Rule) = .initDefault(.{},
     .False = .{ .prefix = Compiler.literal },
     .Nil = .{ .prefix = Compiler.literal },
     .Number = .{ .prefix = Compiler.number },
+    .String = .{ .prefix = Compiler.string },
     .Plus = .{ .infix = Compiler.binary, .prec = .Term },
     .Minus = .{ .prefix = Compiler.unary, .infix = Compiler.binary, .prec = .Term },
     .Star = .{ .infix = Compiler.binary, .prec = .Factor },
@@ -59,6 +62,7 @@ pub const Compiler = struct {
     previous: *tokens.Token, // Direct dereference
     current: *tokens.Token,
     output: *bcInfo.ByteCodeInfo, // Borrowed; the caller owns the bytecode
+    gcAlloc: memory.GCAllocator = .{},
 
     pub fn init(source: []const u8, tokenList: []tokens.Token, output: *bcInfo.ByteCodeInfo) Compiler {
         return .{
@@ -164,6 +168,14 @@ pub const Compiler = struct {
         const lexeme = self.previous.getLexeme(self.source);
         const num = std.fmt.parseFloat(f64, lexeme) catch unreachable;
         const value = values.Value{ .number = num };
+        try self.writeConstant(alloc, value);
+    }
+
+    fn string(self: *Compiler, alloc: Allocator) !void {
+        const objPtr = try strings.copyString(self.source[self.previous.start..], self.previous.length, &self.gcAlloc, alloc);
+        const value = values.Value{
+            .obj = @ptrCast(objPtr),
+        };
         try self.writeConstant(alloc, value);
     }
 
