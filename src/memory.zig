@@ -31,7 +31,7 @@ pub const GCAllocator = struct {
                     const objAsBytes: [*]u8 = @ptrCast(@alignCast(allocation));
                     const totalObject: []u8 = objAsBytes[0..size];
                     // This cast is safe since every object comes from alignedAlloc
-                    const totalObjectWithAlign = @as([]align(4) u8, @alignCast(totalObject));
+                    const totalObjectWithAlign = @as([]align(@alignOf(strings.ObjectString)) u8, @alignCast(totalObject));
                     alloc.free(totalObjectWithAlign);
                 },
             }
