@@ -3,6 +3,9 @@ const bc = @import("bytecode.zig");
 const bcInfo = @import("bytecodeInfo.zig");
 const vmStack = @import("vmStack.zig");
 const values = @import("values.zig");
+const memory = @import("memory.zig");
+const objects = @import("objects.zig");
+const strings = @import("strings.zig");
 
 const print = std.debug.print;
 const t = std.debug.print;
@@ -14,16 +17,29 @@ pub const VMError = error{
 };
 
 pub const VM = struct {
-    byteCodeInfo: *const bcInfo.ByteCodeInfo, // Does not own the bcInfo struct
+    byteCodeInfo: *const bcInfo.ByteCodeInfo = undefined, // Does not own the bcInfo struct
     ip: usize = 0,
     debugFlag: bool = false,
     stack: vmStack.Stack,
+    gcAlloc: memory.GCAllocator = .{},
 
-    pub fn init(source: *const bcInfo.ByteCodeInfo, debugFlag: bool) VM {
-        return .{ .byteCodeInfo = source, .debugFlag = debugFlag, .stack = .{} };
+    pub fn initSettings(debugFlag: bool) VM {
+        return .{
+            .debugFlag = debugFlag,
+            .stack = .{},
+        };
     }
 
-    pub fn execute(self: *VM, writer: *std.Io.Writer) !void {
+    pub fn deinit(self: *VM, alloc: Allocator) void {
+        self.gcAlloc.freeAll(alloc);
+        self.gcAlloc.deinit(alloc);
+    }
+
+    pub fn setByteCode(self: *VM, byteCodeInfo: *const bcInfo.ByteCodeInfo) void {
+        self.byteCodeInfo = byteCodeInfo;
+    }
+
+    pub fn execute(self: *VM, writer: *std.Io.Writer, alloc: Allocator) !void {
         if (self.debugFlag) {
             try writer.print("==== VM Execute Trace ====\n", .{});
         }
@@ -33,7 +49,7 @@ pub const VM = struct {
             switch (opCode) {
                 .ReturnOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | returned, peek: {?}\n", .{ self.ip - 1, self.stack.peek() });
+                        try writer.print("{d:0>4} | returned, peek: {?}\n", .{ self.ip - 1, self.stack.peek(0) });
                     }
                 },
                 .ConstantOp => {
@@ -67,17 +83,42 @@ pub const VM = struct {
                     if (self.debugFlag) {
                         try writer.print("{d:0>4} | add: ", .{self.ip - 1});
                     }
-                    const rValue = self.stack.pop() orelse return VMError.CompileErr;
-                    const lValue = self.stack.pop() orelse return VMError.CompileErr;
-                    if (!lValue.isNum() or !rValue.isNum()) {
-                        return VMError.RuntimeErr;
-                    }
+                    const rPeek = self.stack.peek(0) orelse return VMError.CompileErr;
+                    const lPeek = self.stack.peek(1) orelse return VMError.CompileErr;
+                    const rNum = rPeek.isNum();
+                    const lNum = lPeek.isNum();
+                    const rStr = result: {
+                        const rObj = if (rPeek.isObj()) rPeek.asObj() else break :result false;
+                        break :result rObj.kind == objects.ObjectType.String;
+                    };
+                    const lStr = result: {
+                        const lObj = if (lPeek.isObj()) lPeek.asObj() else break :result false;
+                        break :result lObj.kind == objects.ObjectType.String;
+                    };
 
-                    const result = lValue.asNum() + rValue.asNum();
-                    if (self.debugFlag) {
-                        try writer.print("{d}\n", .{result});
+                    if ((lNum and rNum) or (lStr and rStr)) {
+                        const rValue = self.stack.pop() orelse return VMError.CompileErr;
+                        const lValue = self.stack.pop() orelse return VMError.CompileErr;
+                        if (lNum) { // Case of number addition
+                            const result = lValue.asNum() + rValue.asNum();
+                            if (self.debugFlag) {
+                                try writer.print("{d}\n", .{result});
+                            }
+                            try self.stack.push(values.Value{ .number = result });
+                        } else { // String concatenation
+                            const lString = lValue.asObj().getString();
+                            const rString = rValue.asObj().getString();
+                            const concatString = try std.mem.concat(alloc, u8, &.{ lString, rString });
+                            defer alloc.free(concatString);
+                            const ptr = try strings.makeString(concatString, concatString.len, &self.gcAlloc, alloc);
+                            if (self.debugFlag) {
+                                try writer.print("{s}\n", .{ptr.getString()});
+                            }
+                            try self.stack.push(values.Value{ .obj = @ptrCast(ptr) });
+                        }
+                        continue;
                     }
-                    try self.stack.push(values.Value{ .number = result });
+                    return VMError.RuntimeErr;
                 },
                 .SubOp => {
                     if (self.debugFlag) {

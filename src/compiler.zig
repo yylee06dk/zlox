@@ -5,6 +5,7 @@ const bcInfo = @import("bytecodeInfo.zig");
 const values = @import("values.zig");
 const strings = @import("strings.zig");
 const memory = @import("memory.zig");
+const vm = @import("vm.zig");
 
 const Allocator = std.mem.Allocator;
 const RuleErrorUnion = Allocator.Error || CompileError;
@@ -62,19 +63,21 @@ pub const Compiler = struct {
     previous: *tokens.Token, // Direct dereference
     current: *tokens.Token,
     output: *bcInfo.ByteCodeInfo, // Borrowed; the caller owns the bytecode
-    gcAlloc: memory.GCAllocator = .{},
+    targetVM: *vm.VM,
 
-    pub fn init(source: []const u8, tokenList: []tokens.Token, output: *bcInfo.ByteCodeInfo) Compiler {
+    pub fn init(source: []const u8, tokenList: []tokens.Token, output: *bcInfo.ByteCodeInfo, targetVM: *vm.VM) Compiler {
         return .{
             .source = source,
             .tokenList = tokenList,
             .previous = &(tokenList[0]),
             .current = &(tokenList[0]),
             .output = output,
+            .targetVM = targetVM,
         };
     }
 
     pub fn compile(self: *Compiler, alloc: Allocator) !void {
+        if (self.current.kind == tokens.TokenType.EOF) return;
         try self.expression(alloc);
         if (self.current.kind != tokens.TokenType.EOF) {
             return CompileError.UnterminatedSource;
@@ -172,7 +175,7 @@ pub const Compiler = struct {
     }
 
     fn string(self: *Compiler, alloc: Allocator) !void {
-        const objPtr = try strings.copyString(self.source[self.previous.start..], self.previous.length, &self.gcAlloc, alloc);
+        const objPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, alloc);
         const value = values.Value{
             .obj = @ptrCast(objPtr),
         };

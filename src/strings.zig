@@ -14,15 +14,15 @@ pub const ObjectString = struct {
     }
 };
 
-pub fn allocateString(length: usize, string: []const u8, gcAlloc: *memory.GCAllocator, alloc: Allocator) !*ObjectString {
-    const allocation = try alloc.alignedAlloc(u8, .of(ObjectString), length);
+pub fn allocateString(totalLength: usize, string: []const u8, gcAlloc: *memory.GCAllocator, alloc: Allocator) !*ObjectString {
+    const allocation = try alloc.alignedAlloc(u8, .of(ObjectString), totalLength);
     errdefer alloc.free(allocation);
     const ptr: *ObjectString = @ptrCast(allocation);
-    try gcAlloc.addAllocation(@ptrCast(ptr), length, alloc);
+    try gcAlloc.addAllocation(@ptrCast(ptr), totalLength, alloc);
 
     ptr.* = ObjectString{
         .object = .{ .kind = .String },
-        .length = @intCast(length - @sizeOf(ObjectString)),
+        .length = @intCast(totalLength - @sizeOf(ObjectString)),
     };
 
     @memcpy(allocation[@sizeOf(ObjectString)..], string);
@@ -30,7 +30,7 @@ pub fn allocateString(length: usize, string: []const u8, gcAlloc: *memory.GCAllo
     return @ptrCast(ptr);
 }
 
-pub fn copyString(start: []const u8, length: usize, gcAlloc: *memory.GCAllocator, alloc: Allocator) !*ObjectString {
+pub fn makeString(start: []const u8, length: usize, gcAlloc: *memory.GCAllocator, alloc: Allocator) !*ObjectString {
     const totalLength = @sizeOf(ObjectString) + length;
     const string = start[0..length];
     return try allocateString(totalLength, string, gcAlloc, alloc);

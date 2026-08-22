@@ -27,10 +27,10 @@ pub const Stack = struct {
         return self.stackArray[self.length];
     }
 
-    pub fn peek(self: *const Stack) ?values.Value {
-        if (self.length == 0) {
+    pub fn peek(self: *const Stack, depth: usize) ?values.Value {
+        if (self.length <= depth) {
             return null;
         }
-        return self.stackArray[self.length - 1];
+        return self.stackArray[self.length - 1 - depth];
     }
 };

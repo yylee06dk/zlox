@@ -17,6 +17,8 @@ const BootUpError = error{
 
 pub fn main(init: std.process.Init) !void {
     // Debug allocator used for allocating things in whole main-level scope
+    var machine = vm.VM.initSettings(true);
+    defer machine.deinit(init.gpa);
 
     var argsIterator = init.minimal.args.iterate();
     _ = argsIterator.skip(); // skip binary name
@@ -27,15 +29,15 @@ pub fn main(init: std.process.Init) !void {
             return BootUpError.WrongCommandLine;
         }
 
-        try runFile(init, filePath);
+        try runFile(init, filePath, &machine);
         return;
     }
 
-    try runREPL(init);
+    try runREPL(init, &machine);
     return;
 }
 
-fn runFile(init: std.process.Init, path: []const u8) !void {
+fn runFile(init: std.process.Init, path: []const u8, machine: *vm.VM) !void {
     var alloc = init.gpa;
 
     const source = std.Io.Dir.cwd().readFileAlloc(init.io, path, alloc, .limited(16 * 1024 * 1024)) catch |err| switch (err) {
@@ -52,10 +54,15 @@ fn runFile(init: std.process.Init, path: []const u8) !void {
     var stdout = &stdoutWriter.interface;
     defer stdout.flush() catch {};
 
-    try run(init, source, stdout);
+    try run(
+        init,
+        source,
+        machine,
+        stdout,
+    );
 }
 
-fn runREPL(init: std.process.Init) !void {
+fn runREPL(init: std.process.Init, machine: *vm.VM) !void {
     // REPL
     var stdinBuf: [1024]u8 = undefined;
     var stdinReader = std.Io.File.stdin().readerStreaming(
@@ -85,12 +92,11 @@ fn runREPL(init: std.process.Init) !void {
 
         if (line.len == 0) continue; // Nothing given, but EOF not met
 
-        try run(init, line, stdout);
-        // try run(~~, vm)
+        try run(init, line, machine, stdout);
     }
 }
 
-fn run(init: std.process.Init, source: []const u8, writer: *std.Io.Writer) !void {
+fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std.Io.Writer) !void {
     var alloc = init.gpa;
     // Scanner -- start
     var diagnosticList: std.ArrayList(scan.Diagnostic) = .empty;
@@ -111,11 +117,14 @@ fn run(init: std.process.Init, source: []const u8, writer: *std.Io.Writer) !void
     var bytecodeInfo = bcInfo.ByteCodeInfo.init();
     defer bytecodeInfo.deinit(alloc);
 
-    var compiler = compile.Compiler.init(source, tokenList, &bytecodeInfo);
+    var compiler = compile.Compiler.init(source, tokenList, &bytecodeInfo, machine);
     try compiler.compile(alloc);
+
+    // debugging
     try bytecodeInfo.printByteCodeList("Result", writer);
 
     // VM -- start
-    var VM = vm.VM.init(&bytecodeInfo, true);
-    try VM.execute(writer);
+    machine.setByteCode(&bytecodeInfo);
+    try machine.execute(writer, alloc);
+    try writer.print("DEBUG:\n{f}\n", .{machine.gcAlloc});
 }
