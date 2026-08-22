@@ -57,13 +57,18 @@ const CompileError = error{
     UnterminatedSource,
 };
 
+pub const Diagnostic = struct {
+    token: *tokens.Token, // This requires the tokenList have longer lifetime
+
+};
+
 pub const Compiler = struct {
     source: []const u8, // Needed to get lexeme of tokens
-    tokenList: []tokens.Token, // read-only
+    tokenList: []tokens.Token, // read-only, borrowed
     previous: *tokens.Token, // Direct dereference
     current: *tokens.Token,
     output: *bcInfo.ByteCodeInfo, // Borrowed; the caller owns the bytecode
-    targetVM: *vm.VM,
+    targetVM: *vm.VM, // We write info needed at runtime that's resolved at compile time
 
     pub fn init(source: []const u8, tokenList: []tokens.Token, output: *bcInfo.ByteCodeInfo, targetVM: *vm.VM) Compiler {
         return .{
@@ -77,6 +82,8 @@ pub const Compiler = struct {
     }
 
     pub fn compile(self: *Compiler, alloc: Allocator) !void {
+        // This is double checked since scanner might ignore values
+        // This means the input line was not empty so we scanned it, but then it came out empty since it only had errorful contents
         if (self.current.kind == tokens.TokenType.EOF) return;
         try self.expression(alloc);
         if (self.current.kind != tokens.TokenType.EOF) {

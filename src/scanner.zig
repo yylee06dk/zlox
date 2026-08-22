@@ -31,6 +31,10 @@ pub const Diagnostic = struct {
     pub fn getLexeme(self: *const Diagnostic, source: []const u8) []const u8 {
         return source[self.start .. self.start + self.length];
     }
+
+    pub fn report(self: *const Diagnostic, source: []const u8) void {
+        print("zlox: scanError: [line:{d:>3}|col:{d:>3}] {s} at {s}\n", .{ self.line, self.column, @errorName(self.errorType), self.getLexeme(source) });
+    }
 };
 
 pub const Scanner = struct {
@@ -59,7 +63,7 @@ pub const Scanner = struct {
             const token = self.scanToken(&diagnostic) catch {
                 try diagnostics.append(alloc, diagnostic);
                 continue; // Error recorded, on to the next one!
-            } orelse continue; // Skipping this one
+            }; // Skipping this one
 
             try tokenList.append(alloc, token);
         }
@@ -70,15 +74,9 @@ pub const Scanner = struct {
         return try tokenList.toOwnedSlice(alloc);
     }
 
-    pub fn scanToken(self: *Scanner, context: *Diagnostic) ScanError!?tokens.Token {
+    pub fn scanToken(self: *Scanner, diagnostic: *Diagnostic) ScanError!tokens.Token {
         defer self.skipWhiteSpace();
-        const c = checkEnd: {
-            if (!self.isAtEnd()) {
-                break :checkEnd self.advance();
-            } else {
-                return null;
-            }
-        };
+        const c = self.advance(); // this is okay since we come here after checking isAtEnd
         switch (c) {
             '+' => return self.makeToken(1, tokens.TokenType.Plus),
             '-' => return self.makeToken(1, tokens.TokenType.Minus),
@@ -91,17 +89,12 @@ pub const Scanner = struct {
                     return self.number();
                 }
                 if (c == '"') {
-                    const res, const len = self.string();
-                    const token = res catch |err| {
-                        context.setContext(self, err, len);
-                        return err;
-                    };
-                    return token;
+                    return self.string(diagnostic);
                 }
                 if (ascii.isAlphabetic(c)) {
                     return self.identifier();
                 }
-                context.setContext(self, ScanError.UnknownCharacter, 1);
+                diagnostic.setContext(self, ScanError.UnknownCharacter, 1);
                 return ScanError.UnknownCharacter;
             },
         }
@@ -112,7 +105,7 @@ pub const Scanner = struct {
         while (self.peek()) |c| {
             if (!ascii.isDigit(c)) break;
             _ = self.advance();
-        }
+        } // Consume pre-dot numbers
 
         if (self.checkPeek('.')) {
             var temp = self.peekNext() orelse 0;
@@ -132,19 +125,20 @@ pub const Scanner = struct {
         return self.makeToken(end - start, tokens.TokenType.Number);
     }
 
-    fn string(self: *Scanner) struct { ScanError!tokens.Token, usize } {
+    fn string(self: *Scanner, diagnostic: *Diagnostic) ScanError!tokens.Token {
         const start = self.current; // Ignore the starting '"'
         while (self.peek()) |c| {
             if (c == '"') {
                 const token = self.makeToken(self.current - start, tokens.TokenType.String);
                 _ = self.advance(); // Consume the closing quote.
-                return .{ token, self.current - start };
+                return token;
             }
 
             _ = self.advance();
         }
 
-        return .{ ScanError.UnterminatedString, self.current - start };
+        diagnostic.setContext(self, ScanError.UnterminatedString, self.current - start);
+        return ScanError.UnterminatedString;
     }
 
     fn identifier(self: *Scanner) tokens.Token {
@@ -223,10 +217,9 @@ pub const Scanner = struct {
         const cur = self.source[self.current];
         if (cur == '\n') {
             self.line += 1;
-            self.column = 1;
-        } else {
-            self.column += 1;
+            self.column = 0;
         }
+        self.column += 1;
         self.current += 1;
         return cur;
     }
@@ -236,18 +229,17 @@ pub const Scanner = struct {
     }
 
     // -------------------- Pretty Printing
-
     pub fn printErrors(diagnosticList: *const std.ArrayList(Diagnostic), source: []const u8) void {
-        print("==== Scanning Errors ====\n", .{});
-        for (diagnosticList.items, 0..) |diagnostic, idx| {
-            print("{d:>3}: At line {d:>3}, column: {d:>3} | {} happened at {s}\n", .{ idx + 1, diagnostic.line, diagnostic.column, diagnostic.errorType, diagnostic.getLexeme(source) });
+        for (diagnosticList.items) |diagnostic| {
+            diagnostic.report(source);
         }
     }
 
     pub fn printResults(tokenList: []tokens.Token, source: []const u8, writer: *std.Io.Writer) !void {
         try writer.print("==== Scan Results ====\n", .{});
-        for (tokenList, 0..) |token, idx| {
-            try writer.print("{d:>3}: {s:>12} at line {d:>3}, column: {d:>3} | {s}\n", .{ idx + 1, token.kind.toString(), token.line, token.column, token.getLexeme(source) });
+        for (tokenList) |token| {
+            try writer.print("zlox: Scanner: [line:{d:>3}|col:{d:>3}] {s} as {s}\n", .{ token.line, token.column, token.kind.toString(), token.getLexeme(source) });
         }
+        try writer.flush();
     }
 };
