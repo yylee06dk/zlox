@@ -7,6 +7,7 @@ const Allocator = std.mem.Allocator;
 pub const ObjectString = struct {
     object: objects.Object,
     length: u32,
+    hash: u32,
     // Characters trail (raw bytes of info)
     pub fn getString(self: *const ObjectString) []const u8 {
         const selfAsBytes: [*]const u8 = @ptrCast(@alignCast(self));
