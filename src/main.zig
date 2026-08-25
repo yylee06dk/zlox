@@ -18,7 +18,10 @@ pub const StdInterface = struct {
 
 pub fn main(init: std.process.Init) !void {
     // Setting up machine used during the whole main-scope. The VM has the same life time as the main scope
-    var machine = vm.VM.initSettings(true);
+    var machine = vm.VM.initSettings(true, init.gpa) catch |err| {
+        fatalErrorReport(err);
+        return;
+    };
     defer machine.deinit(init.gpa);
 
     // Setting up basic reader & writer interfaces
@@ -103,37 +106,40 @@ fn runREPL(init: std.process.Init, machine: *vm.VM, interface: *StdInterface) !v
 
 fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std.Io.Writer) !void {
     // Scanner setup
-    var diagnosticList: std.ArrayList(scan.Diagnostic) = .empty;
-    defer diagnosticList.deinit(init.gpa); // Diagnostic list lives within the run-scope.
+    var scanDiagnosticList: std.ArrayList(scan.Diagnostic) = .empty;
+    defer scanDiagnosticList.deinit(init.gpa); // Diagnostic list lives within the run-scope.
 
     var scanner = scan.Scanner.init(source);
-    const tokenList = try scanner.scanTokens(init.gpa, &diagnosticList);
+    const tokenList = try scanner.scanTokens(init.gpa, &scanDiagnosticList);
     defer init.gpa.free(tokenList); // Again, token List lives within the run
 
     // Debugging
-    if (diagnosticList.items.len != 0) {
-        scan.Scanner.printErrors(&diagnosticList, source);
-    } // We proceed if the scan result is still messy
-    try scan.Scanner.printResults(tokenList, source, writer);
+    // if (scanDiagnosticList.items.len != 0) {
+    //     scan.Scanner.printErrors(&scanDiagnosticList, source);
+    // } // We proceed if the scan result is still messy
+    // try scan.Scanner.printResults(tokenList, source, writer);
 
     // Compiler setup
-    var bytecodeInfo = bcInfo.ByteCodeInfo.init();
-    defer bytecodeInfo.deinit(init.gpa); // Same lifetime with run
-
-    var compiler = compile.Compiler.init(source, tokenList, &bytecodeInfo, machine);
-    compiler.compile(init.gpa) catch |err| {
-        //catch desired errors (compiler errors should be catched and reported at this level)
-        return err; // Fatal errors can just be propagated
-    };
-
-    // debugging
-    try bytecodeInfo.printByteCodeList("Result", writer);
+    var compileDiagnostic = compile.Compiler.Diagnostic{};
+    var compiler = compile.Compiler.init(source, tokenList, machine);
+    var chunk = compiler.compileOwnedChunk(init.gpa, &compileDiagnostic) catch |err| switch (err) {
+        error.ParseFailed => {
+            compileDiagnostic.report(source);
+            return;
+        },
+        else => return err, // Fatal errors can just be propagated
+    } orelse return; // Nothing to compile.
+    defer chunk.deinit(init.gpa);
 
     // VM setup
-    machine.setByteCode(&bytecodeInfo);
-    machine.execute(writer, init.gpa) catch |err| {
-        // VM errors should be catched and handled
-        return err; // Fatal errors can just be propagated
+    var vmDiagnostic = vm.VM.Diagnostic{};
+    machine.setChunk(&chunk);
+    machine.execute(writer, init.gpa, &vmDiagnostic) catch |err| switch (err) {
+        error.RuntimeError, error.CompileError => {
+            vmDiagnostic.report();
+            return;
+        },
+        else => return err, // Fatal errors can just be propagated
     };
-    try writer.print("DEBUG:\n{f}\n", .{machine.gcAlloc});
+    try writer.print("==== GC state ====\n{f}\n", .{machine.gcAlloc});
 }

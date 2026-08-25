@@ -11,35 +11,71 @@ const print = std.debug.print;
 const t = std.debug.print;
 const Allocator = std.mem.Allocator;
 
-pub const VMError = error{
-    CompileErr,
-    RuntimeErr,
-};
-
 pub const VM = struct {
-    byteCodeInfo: *const bcInfo.ByteCodeInfo = undefined, // Does not own the bcInfo struct
+    chunk: *const bcInfo.Chunk = undefined, // Borrowed
     ip: usize = 0,
     debugFlag: bool = false,
     stack: vmStack.Stack,
     gcAlloc: memory.GCAllocator = .{},
 
-    pub fn initSettings(debugFlag: bool) VM {
+    pub const Error = error{
+        CompileError,
+        RuntimeError,
+    };
+
+    pub const Diagnostic = struct {
+        vmSnapShot: *VM = undefined,
+        message: []const u8 = undefined,
+
+        fn setContext(self: *Diagnostic, vm: *VM, message: []const u8) void {
+            self.vmSnapShot = vm;
+            self.message = message;
+        }
+
+        pub fn report(self: *Diagnostic) void {
+            print("zlox: RuntimeError: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.ip, self.message });
+        }
+
+        fn getLine(self: *const Diagnostic) usize {
+            return self.vmSnapShot.chunk.lineSlice[self.vmSnapShot.ip - 1];
+        }
+    };
+
+    const OperandType = enum {
+        number,
+        string,
+        boolean,
+
+        fn GetType(comptime self: OperandType) type {
+            return switch (self) {
+                .number => f64,
+                .string => []const u8,
+                .boolean => bool,
+            };
+        }
+    };
+
+    pub fn initSettings(debugFlag: bool, alloc: Allocator) Allocator.Error!VM {
         return .{
             .debugFlag = debugFlag,
-            .stack = .{},
+            .stack = try vmStack.Stack.init(alloc),
         };
     }
 
     pub fn deinit(self: *VM, alloc: Allocator) void {
         self.gcAlloc.freeAll(alloc);
         self.gcAlloc.deinit(alloc);
+        self.stack.deinit(alloc);
     }
 
-    pub fn setByteCode(self: *VM, byteCodeInfo: *const bcInfo.ByteCodeInfo) void {
-        self.byteCodeInfo = byteCodeInfo;
+    pub fn setChunk(self: *VM, chunk: *const bcInfo.Chunk) void {
+        self.chunk = chunk;
+        // For the repl session, ip and stack needs to be reset
+        self.ip = 0;
+        self.stack.clear();
     }
 
-    pub fn execute(self: *VM, writer: *std.Io.Writer, alloc: Allocator) !void {
+    pub fn execute(self: *VM, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
         if (self.debugFlag) {
             try writer.print("==== VM Execute Trace ====\n", .{});
         }
@@ -55,7 +91,7 @@ pub const VM = struct {
                 .ConstantOp => {
                     try writer.print("{d:0>4} | constant: ", .{self.ip - 1});
                     const valueAddr = self.advance();
-                    const value = self.byteCodeInfo.constantList.items[valueAddr];
+                    const value = self.chunk.constantSlice[valueAddr];
                     try self.stack.push(value);
                     if (self.debugFlag) {
                         try writer.print("{}\n", .{value});
@@ -74,114 +110,131 @@ pub const VM = struct {
                             try self.stack.push(values.Value{ .number = -v.asNum() });
                             continue;
                         }
-                        return VMError.RuntimeErr;
+                        return Error.RuntimeError;
                     } else {
-                        return VMError.CompileErr;
+                        return Error.CompileError;
                     }
                 },
-                .AddOp => {
-                    if (self.debugFlag) {
-                        try writer.print("{d:0>4} | add: ", .{self.ip - 1});
-                    }
-                    const rPeek = self.stack.peek(0) orelse return VMError.CompileErr;
-                    const lPeek = self.stack.peek(1) orelse return VMError.CompileErr;
-                    const rNum = rPeek.isNum();
-                    const lNum = lPeek.isNum();
-                    const rStr = result: {
-                        const rObj = if (rPeek.isObj()) rPeek.asObj() else break :result false;
-                        break :result rObj.kind == objects.ObjectType.String;
-                    };
-                    const lStr = result: {
-                        const lObj = if (lPeek.isObj()) lPeek.asObj() else break :result false;
-                        break :result lObj.kind == objects.ObjectType.String;
-                    };
-
-                    if ((lNum and rNum) or (lStr and rStr)) {
-                        const rValue = self.stack.pop() orelse return VMError.CompileErr;
-                        const lValue = self.stack.pop() orelse return VMError.CompileErr;
-                        if (lNum) { // Case of number addition
-                            const result = lValue.asNum() + rValue.asNum();
-                            if (self.debugFlag) {
-                                try writer.print("{d}\n", .{result});
-                            }
-                            try self.stack.push(values.Value{ .number = result });
-                        } else { // String concatenation
-                            const lString = lValue.asObj().getString();
-                            const rString = rValue.asObj().getString();
-                            const concatString = try std.mem.concat(alloc, u8, &.{ lString, rString });
-                            defer alloc.free(concatString);
-                            const ptr = try strings.makeString(concatString, concatString.len, &self.gcAlloc, alloc);
-                            if (self.debugFlag) {
-                                try writer.print("{s}\n", .{ptr.getString()});
-                            }
-                            try self.stack.push(values.Value{ .obj = @ptrCast(ptr) });
-                        }
-                        continue;
-                    }
-                    return VMError.RuntimeErr;
+                .AddOp, .SubOp, .MultOp, .DivOp => {
+                    try self.doBinaryOp(opCode, writer, alloc, diagnostics);
                 },
-                .SubOp => {
-                    if (self.debugFlag) {
-                        try writer.print("{d:0>4} | sub: ", .{self.ip - 1});
-                    }
-                    const rValue = self.stack.pop() orelse return VMError.CompileErr;
-                    const lValue = self.stack.pop() orelse return VMError.CompileErr;
-                    if (!lValue.isNum() or !rValue.isNum()) {
-                        return VMError.RuntimeErr;
-                    }
-
-                    const result = lValue.asNum() - rValue.asNum();
-                    if (self.debugFlag) {
-                        try writer.print("{d}\n", .{result});
-                    }
-                    try self.stack.push(values.Value{ .number = result });
-                },
-                .MultOp => {
-                    if (self.debugFlag) {
-                        try writer.print("{d:0>4} | mult: ", .{self.ip - 1});
-                    }
-                    const rValue = self.stack.pop() orelse return VMError.CompileErr;
-                    const lValue = self.stack.pop() orelse return VMError.CompileErr;
-                    if (!lValue.isNum() or !rValue.isNum()) {
-                        return VMError.RuntimeErr;
-                    }
-
-                    const result = lValue.asNum() * rValue.asNum();
-                    if (self.debugFlag) {
-                        try writer.print("{d}\n", .{result});
-                    }
-                    try self.stack.push(values.Value{ .number = result });
-                },
-                .DivOp => {
-                    if (self.debugFlag) {
-                        try writer.print("{d:0>4} | div: ", .{self.ip - 1});
-                    }
-                    const rValue = self.stack.pop() orelse return VMError.CompileErr;
-                    const lValue = self.stack.pop() orelse return VMError.CompileErr;
-                    if (!lValue.isNum() or !rValue.isNum()) {
-                        return VMError.RuntimeErr;
-                    }
-
-                    const result = lValue.asNum() / rValue.asNum();
-                    if (self.debugFlag) {
-                        try writer.print("{d}\n", .{result});
-                    }
-                    try self.stack.push(values.Value{ .number = result });
-                },
-
-                // else => return VMError.CompileErr,
+                // else => return Error.CompileErr,
             }
         }
+    }
+
+    fn doBinaryOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
+        const operatorName = switch (opCode) {
+            .AddOp => "+",
+            .SubOp => "-",
+            .MultOp => "*",
+            .DivOp => "/",
+            else => unreachable,
+        };
+        if (self.debugFlag) {
+            try writer.print("{d:0>4} | {s}: ", .{ self.ip - 1, operatorName });
+        }
+
+        const operandsNum = try self.unboxOperands(OperandType.number);
+        if (operandsNum) |o| {
+            _ = self.stack.pop();
+            _ = self.stack.pop();
+            const result = switch (opCode) {
+                .AddOp => o.lVal + o.rVal,
+                .SubOp => o.lVal - o.rVal,
+                .MultOp => o.lVal * o.rVal,
+                .DivOp => o.lVal / o.rVal,
+                else => unreachable,
+            };
+            if (self.debugFlag) {
+                try writer.print("{d}\n", .{result});
+            }
+            try self.stack.push(values.Value{ .number = result });
+            return;
+        }
+
+        const operandsStr = try self.unboxOperands(OperandType.string);
+        if (operandsStr != null and opCode == .AddOp) {
+            const o = if (operandsStr) |v| v else unreachable;
+            _ = self.stack.pop();
+            _ = self.stack.pop();
+            if (opCode != .AddOp) return Error.RuntimeError;
+
+            const concatString = try std.mem.concat(alloc, u8, &.{ o.lVal, o.rVal });
+            defer alloc.free(concatString);
+            const ptr = try strings.makeString(concatString, concatString.len, &self.gcAlloc, alloc);
+            if (self.debugFlag) {
+                try writer.print("{s}\n", .{ptr.getString()});
+            }
+            try self.stack.push(values.Value{ .obj = @ptrCast(ptr) });
+            return;
+        }
+
+        const errMsg = switch (opCode) {
+            .AddOp => "Operands of operator '+' must both have type number or string",
+            .SubOp => "Operands of operator '-' must both have type number",
+            .MultOp => "Operands of operator '*' must both have type number",
+            .DivOp => "Operands of operator '/' must both have type number",
+            else => unreachable,
+        };
+        diagnostics.setContext(self, errMsg);
+        return Error.RuntimeError;
+    }
+
+    fn unboxOperands(self: *VM, comptime expectedType: OperandType) Error!?struct { lVal: expectedType.GetType(), rVal: expectedType.GetType() } {
+        const rPeek = self.stack.peek(0) orelse return Error.CompileError;
+        const lPeek = self.stack.peek(1) orelse return Error.CompileError;
+
+        switch (expectedType) {
+            .number => {
+                const isNumLeft = lPeek.isNum();
+                const isNumRight = rPeek.isNum();
+
+                if (isNumLeft and isNumRight) {
+                    const lVal = lPeek.asNum();
+                    const rVal = rPeek.asNum();
+                    return .{ .lVal = lVal, .rVal = rVal };
+                }
+            },
+            .string => {
+                const isStrLeft = result: {
+                    const lObj = if (lPeek.isObj()) lPeek.asObj() else break :result false;
+                    break :result lObj.kind == objects.ObjectType.String;
+                };
+                const isStrRight = result: {
+                    const rObj = if (rPeek.isObj()) rPeek.asObj() else break :result false;
+                    break :result rObj.kind == objects.ObjectType.String;
+                };
+
+                if (isStrLeft and isStrRight) {
+                    const lVal = lPeek.asObj().getString();
+                    const rVal = rPeek.asObj().getString();
+
+                    return .{ .lVal = lVal, .rVal = rVal };
+                }
+            },
+            .boolean => {
+                const isBoolLeft = lPeek.isBool();
+                const isBoolRight = rPeek.isBool();
+
+                if (isBoolLeft and isBoolRight) {
+                    const lVal = lPeek.asBool();
+                    const rVal = rPeek.asBool();
+                    return .{ .lVal = lVal, .rVal = rVal };
+                }
+            },
+        }
+        return null;
     }
 
     fn isAtEnd(
         self: *const VM,
     ) bool {
-        return (self.ip >= self.byteCodeInfo.byteCodeList.items.len);
+        return (self.ip >= self.chunk.codeSlice.len);
     }
 
     fn advance(self: *VM) u8 {
         self.ip += 1;
-        return self.byteCodeInfo.byteCodeList.items[self.ip - 1];
+        return self.chunk.codeSlice[self.ip - 1];
     }
 };

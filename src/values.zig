@@ -2,7 +2,14 @@ const std = @import("std");
 const objects = @import("objects.zig");
 const strings = @import("strings.zig");
 
-pub const Value = union(enum) {
+pub const valueType = enum {
+    number,
+    boolean,
+    nil,
+    obj,
+};
+
+pub const Value = union(valueType) {
     number: f64,
     boolean: bool,
     nil: u1,

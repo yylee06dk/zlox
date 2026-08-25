@@ -1,5 +1,7 @@
 const std = @import("std");
 const values = @import("values.zig");
+
+const Allocator = std.mem.Allocator;
 const StackMax = 512;
 
 pub const StackError = error{
@@ -7,8 +9,20 @@ pub const StackError = error{
 };
 
 pub const Stack = struct {
-    stackArray: [StackMax]values.Value = .{values.Value{ .nil = 1 }} ** StackMax, // I could use arrayLists but I wanted to have a maximum for it
+    stackArray: []values.Value, // I could use arrayLists but I wanted to have a maximum for it
     length: usize = 0,
+
+    pub fn init(alloc: Allocator) Allocator.Error!Stack {
+        const slice = try alloc.alloc(values.Value, StackMax);
+        return .{
+            .stackArray = slice,
+            .length = 0,
+        };
+    }
+
+    pub fn deinit(self: *Stack, alloc: Allocator) void {
+        alloc.free(self.stackArray);
+    }
 
     pub fn push(self: *Stack, item: values.Value) !void {
         if (self.length + 1 >= StackMax) {
@@ -32,5 +46,9 @@ pub const Stack = struct {
             return null;
         }
         return self.stackArray[self.length - 1 - depth];
+    }
+
+    pub fn clear(self: *Stack) void {
+        self.length = 0;
     }
 };

@@ -8,10 +8,10 @@ const memory = @import("memory.zig");
 const vm = @import("vm.zig");
 
 const Allocator = std.mem.Allocator;
-const RuleErrorUnion = Allocator.Error || CompileError;
-const ruleFunc = *const fn (*Compiler, Allocator) RuleErrorUnion!void;
+const RuleErrorUnion = Allocator.Error || Compiler.Error;
+const ruleFunc = *const fn (*Compiler, Allocator, *Compiler.Diagnostic) RuleErrorUnion!void;
 
-const t = std.debug.print;
+const print = std.debug.print;
 
 pub const Precedence = enum {
     None,
@@ -50,65 +50,79 @@ fn getRule(tokenType: tokens.TokenType) Rule {
     return ruleTable.get(tokenType);
 }
 
-const CompileError = error{
-    ExpectedExpression,
-    UnmatchedExpression,
-    ExpectedBinaryOp,
-    UnterminatedSource,
-};
-
-pub const Diagnostic = struct {
-    token: *tokens.Token, // This requires the tokenList have longer lifetime
-
-};
-
 pub const Compiler = struct {
     source: []const u8, // Needed to get lexeme of tokens
     tokenList: []tokens.Token, // read-only, borrowed
     previous: *tokens.Token, // Direct dereference
     current: *tokens.Token,
-    output: *bcInfo.ByteCodeInfo, // Borrowed; the caller owns the bytecode
+    output: bcInfo.ByteCodeInfo, // Just an intermediate data structure used
     targetVM: *vm.VM, // We write info needed at runtime that's resolved at compile time
 
-    pub fn init(source: []const u8, tokenList: []tokens.Token, output: *bcInfo.ByteCodeInfo, targetVM: *vm.VM) Compiler {
+    const Error = error{
+        ParseFailed,
+    };
+
+    // Can be upgraded much more!
+    pub const Diagnostic = struct {
+        token: *tokens.Token = undefined, // This requires the tokenList have longer lifetime
+        message: []const u8 = undefined,
+
+        fn setContext(self: *Diagnostic, compiler: *Compiler, message: []const u8) void {
+            self.token = compiler.previous; //Always true?
+            self.message = message;
+        }
+
+        pub fn report(self: *const Diagnostic, source: []const u8) void {
+            print("zlox: CompileError: [line:{d:>3}|col:{d:>3}] {s} {s}\n", .{ self.token.line, self.token.column, self.message, self.token.getLexeme(source) });
+        }
+    };
+
+    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM) Compiler {
         return .{
             .source = source,
             .tokenList = tokenList,
             .previous = &(tokenList[0]),
             .current = &(tokenList[0]),
-            .output = output,
+            .output = bcInfo.ByteCodeInfo.init(), // 72bytes
             .targetVM = targetVM,
         };
     }
 
-    pub fn compile(self: *Compiler, alloc: Allocator) !void {
+    pub fn compileOwnedChunk(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !?bcInfo.Chunk {
         // This is double checked since scanner might ignore values
         // This means the input line was not empty so we scanned it, but then it came out empty since it only had errorful contents
-        if (self.current.kind == tokens.TokenType.EOF) return;
-        try self.expression(alloc);
+        if (self.current.kind == tokens.TokenType.EOF) return null;
+        try self.expression(alloc, diagnostic);
         if (self.current.kind != tokens.TokenType.EOF) {
-            return CompileError.UnterminatedSource;
+            return Error.ParseFailed;
         }
-        return;
+        // The ownership goes to the caller
+        return try self.output.deinit(alloc);
     }
 
-    fn parsePrecedence(self: *Compiler, prec: Precedence, alloc: Allocator) !void {
+    fn expression(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+        try self.parsePrecedence(Precedence.Assignment, alloc, diagnostic);
+    }
+
+    fn parsePrecedence(self: *Compiler, prec: Precedence, alloc: Allocator, diagnostic: *Diagnostic) !void {
         self.advance();
         const prevTokenType = self.previous.kind;
-        const prefix = getRule(prevTokenType).prefix orelse return CompileError.ExpectedExpression;
+        const prefix = getRule(prevTokenType).prefix orelse {
+            diagnostic.setContext(self, "Expected preceding expression at");
+            return Error.ParseFailed;
+        };
 
-        try prefix(self, alloc);
+        try prefix(self, alloc, diagnostic);
 
         while (!self.isAtEnd() and @intFromEnum(getRule(self.current.kind).prec) >= @intFromEnum(prec)) {
             self.advance(); // We in this loop means we gonna parse the one we checked above
-            const infix = getRule(self.previous.kind).infix orelse return CompileError.ExpectedBinaryOp;
+            const infix = getRule(self.previous.kind).infix orelse {
+                diagnostic.setContext(self, "Expected following infix operator, instead got: ");
+                return Error.ParseFailed;
+            }; // Really bad since we entered the while loop but don't have a matching infix operator
 
-            try infix(self, alloc);
+            try infix(self, alloc, diagnostic);
         }
-    }
-
-    fn expression(self: *Compiler, alloc: Allocator) !void {
-        try self.parsePrecedence(Precedence.Assignment, alloc);
     }
 
     fn advance(self: *Compiler) void {
@@ -129,15 +143,16 @@ pub const Compiler = struct {
         return self.current.kind == tokens.TokenType.EOF;
     }
 
-    fn consume(self: *Compiler, expect: tokens.TokenType) !void {
+    fn consume(self: *Compiler, expect: tokens.TokenType) Error!void {
         if (self.isAtEnd() or self.current.kind != expect) {
-            return CompileError.UnmatchedExpression;
+            return Error.ParseFailed;
         }
         self.advance();
         return;
     }
 
-    fn writeConstant(self: *Compiler, alloc: Allocator, value: values.Value) !void {
+    fn writeConstant(self: *Compiler, alloc: Allocator, value: values.Value) Allocator.Error!void {
+        // Only causes Oom error
         const addr = try self.output.addConstant(alloc, value);
         if (addr > std.math.maxInt(u8)) {
             unreachable; // Temporary fix
@@ -156,7 +171,8 @@ pub const Compiler = struct {
     }
 
     // ------------ Parsing functions -------------
-    fn literal(self: *Compiler, alloc: Allocator) !void {
+    fn literal(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Allocator.Error!void {
+        _ = diagnostic;
         switch (self.previous.kind) {
             .True => {
                 const value = values.Value{ .boolean = true };
@@ -174,14 +190,16 @@ pub const Compiler = struct {
         }
     }
 
-    fn number(self: *Compiler, alloc: Allocator) !void {
+    fn number(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Allocator.Error!void {
+        _ = diagnostic;
         const lexeme = self.previous.getLexeme(self.source);
         const num = std.fmt.parseFloat(f64, lexeme) catch unreachable;
         const value = values.Value{ .number = num };
         try self.writeConstant(alloc, value);
     }
 
-    fn string(self: *Compiler, alloc: Allocator) !void {
+    fn string(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Allocator.Error!void {
+        _ = diagnostic;
         const objPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, alloc);
         const value = values.Value{
             .obj = @ptrCast(objPtr),
@@ -190,10 +208,10 @@ pub const Compiler = struct {
     }
 
     // prefix parsing function for minus
-    fn unary(self: *Compiler, alloc: Allocator) !void {
+    fn unary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) (Allocator.Error || Error)!void {
         const opTokenType = self.previous.kind;
 
-        try self.parsePrecedence(Precedence.Unary, alloc);
+        try self.parsePrecedence(Precedence.Unary, alloc, diagnostic);
 
         switch (opTokenType) {
             .Minus => try self.output.writeCode(alloc, @intFromEnum(bc.opCode.NegateOp), self.previous.line),
@@ -201,11 +219,11 @@ pub const Compiler = struct {
         }
     }
 
-    fn binary(self: *Compiler, alloc: Allocator) !void {
+    fn binary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) (Allocator.Error || Error)!void {
         const opTokenType = self.previous.kind;
         const curPrec = getRule(opTokenType).prec;
 
-        try self.parsePrecedence(@enumFromInt(@intFromEnum(curPrec) + 1), alloc);
+        try self.parsePrecedence(@enumFromInt(@intFromEnum(curPrec) + 1), alloc, diagnostic);
 
         switch (opTokenType) {
             .Plus => try self.output.writeCode(alloc, @intFromEnum(bc.opCode.AddOp), self.previous.line),

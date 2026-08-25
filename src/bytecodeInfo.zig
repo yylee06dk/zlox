@@ -9,6 +9,19 @@ const Allocator = std.mem.Allocator;
 
 const t = std.debug.print;
 
+pub const Chunk = struct {
+    codeSlice: []u8,
+    lineSlice: []usize,
+    constantSlice: []values.Value,
+    // Owns all the slices
+
+    pub fn deinit(self: *Chunk, alloc: Allocator) void {
+        alloc.free(self.codeSlice);
+        alloc.free(self.lineSlice);
+        alloc.free(self.constantSlice);
+    }
+};
+
 pub const ByteCodeInfo = struct {
     // Struct fields
     byteCodeList: Code,
@@ -20,18 +33,20 @@ pub const ByteCodeInfo = struct {
         return .{ .byteCodeList = .empty, .lineList = .empty, .constantList = .empty };
     }
 
-    pub fn deinit(self: *ByteCodeInfo, alloc: Allocator) void {
-        self.byteCodeList.deinit(alloc);
-        self.lineList.deinit(alloc);
-        self.constantList.deinit(alloc);
+    pub fn deinit(self: *ByteCodeInfo, alloc: Allocator) Allocator.Error!Chunk {
+        return .{
+            .codeSlice = try self.byteCodeList.toOwnedSlice(alloc),
+            .lineSlice = try self.lineList.toOwnedSlice(alloc),
+            .constantSlice = try self.constantList.toOwnedSlice(alloc),
+        };
     }
 
-    pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: usize) !void {
+    pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: usize) Allocator.Error!void {
         try self.byteCodeList.append(alloc, code);
         try self.lineList.append(alloc, line);
     }
 
-    pub fn addConstant(self: *ByteCodeInfo, alloc: Allocator, item: values.Value) !usize {
+    pub fn addConstant(self: *ByteCodeInfo, alloc: Allocator, item: values.Value) Allocator.Error!usize {
         try self.constantList.append(alloc, item);
         const addrIdx = self.constantList.items.len - 1;
         return addrIdx;

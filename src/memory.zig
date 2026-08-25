@@ -16,7 +16,7 @@ pub const GCAllocator = struct {
         self.allocationList.deinit(alloc);
     }
 
-    pub fn addAllocation(self: *GCAllocator, itemPtr: *objects.Object, sizeChange: usize, alloc: Allocator) !void {
+    pub fn addAllocation(self: *GCAllocator, itemPtr: *objects.Object, sizeChange: usize, alloc: Allocator) Allocator.Error!void {
         try self.allocationList.append(alloc, .{ .payload = itemPtr, .size = sizeChange });
         self.curAllocSize += sizeChange;
         // Later on check if it got over the limit
