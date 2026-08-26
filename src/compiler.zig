@@ -200,7 +200,7 @@ pub const Compiler = struct {
 
     fn string(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Allocator.Error!void {
         _ = diagnostic;
-        const objPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, alloc);
+        const objPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
         const value = values.Value{
             .obj = @ptrCast(objPtr),
         };

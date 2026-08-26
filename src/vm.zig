@@ -6,6 +6,7 @@ const values = @import("values.zig");
 const memory = @import("memory.zig");
 const objects = @import("objects.zig");
 const strings = @import("strings.zig");
+const table = @import("table.zig");
 
 const print = std.debug.print;
 const t = std.debug.print;
@@ -16,6 +17,7 @@ pub const VM = struct {
     ip: usize = 0,
     debugFlag: bool = false,
     stack: vmStack.Stack,
+    stringPool: table.Table,
     gcAlloc: memory.GCAllocator = .{},
 
     pub const Error = error{
@@ -59,6 +61,7 @@ pub const VM = struct {
         return .{
             .debugFlag = debugFlag,
             .stack = try vmStack.Stack.init(alloc),
+            .stringPool = try table.Table.init(alloc),
         };
     }
 
@@ -162,7 +165,7 @@ pub const VM = struct {
 
             const concatString = try std.mem.concat(alloc, u8, &.{ o.lVal, o.rVal });
             defer alloc.free(concatString);
-            const ptr = try strings.makeString(concatString, concatString.len, &self.gcAlloc, alloc);
+            const ptr = try strings.makeString(concatString, concatString.len, &self.gcAlloc, &self.stringPool, alloc);
             if (self.debugFlag) {
                 try writer.print("{s}\n", .{ptr.getString()});
             }
