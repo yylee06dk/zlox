@@ -48,13 +48,9 @@ pub const Table = struct {
     pub fn contains(self: *const Table, string: []const u8, hash: u32) ?*strings.ObjectString {
         var expectPos = @mod(hash, self.capacity);
         while (true) : (expectPos = @mod(expectPos + 1, self.capacity)) {
-            t("from contains\n", .{});
             const e = if (self.baseArray[expectPos]) |e| e else return null;
-            t("from contains0: {s}|{s}\n", .{ e.key.getString(), string });
             if (hash == e.key.hash and e.key.length == string.len) {
-                t("from contains1: {s}|{s}\n", .{ e.key.getString(), string });
                 if (std.mem.eql(u8, e.key.getString(), string)) {
-                    t("from contains2: {s}|{s}\n", .{ e.key.getString(), string });
                     return e.key;
                 }
             }

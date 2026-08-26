@@ -69,6 +69,7 @@ pub const VM = struct {
         self.gcAlloc.freeAll(alloc);
         self.gcAlloc.deinit(alloc);
         self.stack.deinit(alloc);
+        self.stringPool.deinit(alloc);
     }
 
     pub fn setChunk(self: *VM, chunk: *const bcInfo.Chunk) void {
