@@ -84,6 +84,23 @@ pub const Scanner = struct {
             '/' => return self.makeToken(1, tokens.TokenType.Slash),
             '(' => return self.makeToken(1, tokens.TokenType.LeftParen),
             ')' => return self.makeToken(1, tokens.TokenType.RightParen),
+            ';' => return self.makeToken(1, tokens.TokenType.Semicolon),
+            '!' => {
+                const hasEqual = self.match('=');
+                return self.makeToken(if (hasEqual) 2 else 1, if (hasEqual) tokens.TokenType.BangEquals else tokens.TokenType.Bang);
+            },
+            '=' => {
+                const hasEqual = self.match('=');
+                return self.makeToken(if (hasEqual) 2 else 1, if (hasEqual) tokens.TokenType.EqualEquals else tokens.TokenType.Equals);
+            },
+            '>' => {
+                const hasEqual = self.match('=');
+                return self.makeToken(if (hasEqual) 2 else 1, if (hasEqual) tokens.TokenType.GreaterEqual else tokens.TokenType.Greater);
+            },
+            '<' => {
+                const hasEqual = self.match('=');
+                return self.makeToken(if (hasEqual) 2 else 1, if (hasEqual) tokens.TokenType.LessEqual else tokens.TokenType.Less);
+            },
             else => {
                 if (ascii.isDigit(c)) {
                     return self.number();
@@ -154,18 +171,21 @@ pub const Scanner = struct {
         const length = self.current - start;
         // Check if keyword
         switch (self.source[start]) {
-            't' => if (self.checkRest("rue", start, length)) return self.makeToken(length, tokens.TokenType.True),
             'f' => if (self.checkRest("alse", start, length)) return self.makeToken(length, tokens.TokenType.False),
             'n' => if (self.checkRest("il", start, length)) return self.makeToken(length, tokens.TokenType.Nil),
+            'p' => if (self.checkRest("rint", start, length)) return self.makeToken(length, tokens.TokenType.Print),
+            't' => if (self.checkRest("rue", start, length)) return self.makeToken(length, tokens.TokenType.True),
+            'v' => if (self.checkRest("ar", start, length)) return self.makeToken(length, tokens.TokenType.Var),
             else => {},
         }
         return self.makeToken(length, tokens.TokenType.Identifier);
     }
 
     fn checkRest(self: *Scanner, rest: []const u8, start: usize, length: usize) bool {
+        if (length != rest.len + 1) return false;
+
         var i: usize = 1;
         for (rest) |c| {
-            if (i >= length) return false;
             if (c != self.source[start + i]) {
                 return false;
             }
@@ -197,6 +217,14 @@ pub const Scanner = struct {
             return c == expect;
         }
         return false;
+    }
+
+    fn match(self: *Scanner, expected: u8) bool {
+        const current = self.peek() orelse return false;
+        if (current != expected) return false;
+
+        _ = self.advance();
+        return true;
     }
 
     fn peek(self: *const Scanner) ?u8 {

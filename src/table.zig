@@ -94,6 +94,7 @@ pub const Table = struct {
     }
 };
 
+// Helper functions
 fn initSliceWithNull(slice: []?Table.Entry) void {
     for (0..slice.len) |idx| {
         slice[idx] = null;

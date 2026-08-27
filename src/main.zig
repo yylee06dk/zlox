@@ -142,4 +142,5 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
         else => return err, // Fatal errors can just be propagated
     };
     try writer.print("==== GC state ====\n{f}\n", .{machine.gcAlloc});
+    try writer.flush();
 }

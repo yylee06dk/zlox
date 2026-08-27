@@ -8,8 +8,8 @@ const memory = @import("memory.zig");
 const vm = @import("vm.zig");
 
 const Allocator = std.mem.Allocator;
-const RuleErrorUnion = Allocator.Error || Compiler.Error;
-const ruleFunc = *const fn (*Compiler, Allocator, *Compiler.Diagnostic) RuleErrorUnion!void;
+const Errors = Allocator.Error || Compiler.Error;
+const ruleFunc = *const fn (*Compiler, Allocator, *Compiler.Diagnostic) Errors!void;
 
 const print = std.debug.print;
 
@@ -67,8 +67,8 @@ pub const Compiler = struct {
         token: *tokens.Token = undefined, // This requires the tokenList have longer lifetime
         message: []const u8 = undefined,
 
-        fn setContext(self: *Diagnostic, compiler: *Compiler, message: []const u8) void {
-            self.token = compiler.previous; //Always true?
+        fn setContext(self: *Diagnostic, ownerToken: *tokens.Token, message: []const u8) void {
+            self.token = ownerToken; //Always true?
             self.message = message;
         }
 
@@ -92,12 +92,24 @@ pub const Compiler = struct {
         // This is double checked since scanner might ignore values
         // This means the input line was not empty so we scanned it, but then it came out empty since it only had errorful contents
         if (self.current.kind == tokens.TokenType.EOF) return null;
-        try self.expression(alloc, diagnostic);
+        while (!self.isAtEnd()) {
+            try self.statement(alloc, diagnostic);
+        }
         if (self.current.kind != tokens.TokenType.EOF) {
             return Error.ParseFailed;
         }
         // The ownership goes to the caller
         return try self.output.deinit(alloc);
+    }
+
+    fn statement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+        if (self.match(tokens.TokenType.Print)) {
+            try self.printStatement(alloc, diagnostic);
+        } else if (self.match(tokens.TokenType.Var)) {
+            try self.varStatement(alloc, diagnostic);
+        } else {
+            try self.expressionStatement(alloc, diagnostic);
+        }
     }
 
     fn expression(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
@@ -108,7 +120,7 @@ pub const Compiler = struct {
         self.advance();
         const prevTokenType = self.previous.kind;
         const prefix = getRule(prevTokenType).prefix orelse {
-            diagnostic.setContext(self, "Expected preceding expression at");
+            diagnostic.setContext(self.previous, "Expected preceding expression at");
             return Error.ParseFailed;
         };
 
@@ -117,7 +129,7 @@ pub const Compiler = struct {
         while (!self.isAtEnd() and @intFromEnum(getRule(self.current.kind).prec) >= @intFromEnum(prec)) {
             self.advance(); // We in this loop means we gonna parse the one we checked above
             const infix = getRule(self.previous.kind).infix orelse {
-                diagnostic.setContext(self, "Expected following infix operator, instead got: ");
+                diagnostic.setContext(self.previous, "Expected following infix operator, instead got: ");
                 return Error.ParseFailed;
             }; // Really bad since we entered the while loop but don't have a matching infix operator
 
@@ -143,12 +155,21 @@ pub const Compiler = struct {
         return self.current.kind == tokens.TokenType.EOF;
     }
 
-    fn consume(self: *Compiler, expect: tokens.TokenType) Error!void {
+    fn consume(self: *Compiler, expect: tokens.TokenType, owner: *tokens.Token, diagnostics: *Diagnostic) !void {
         if (self.isAtEnd() or self.current.kind != expect) {
+            diagnostics.setContext(owner, "Expected something.. at");
             return Error.ParseFailed;
         }
         self.advance();
         return;
+    }
+
+    fn match(self: *Compiler, expect: tokens.TokenType) bool {
+        if (self.current.kind == expect) {
+            self.advance();
+            return true;
+        }
+        return false;
     }
 
     fn writeConstant(self: *Compiler, alloc: Allocator, value: values.Value) Allocator.Error!void {
@@ -170,7 +191,49 @@ pub const Compiler = struct {
         );
     }
 
-    // ------------ Parsing functions -------------
+    fn parseVariable(self: *Compiler, alloc: Allocator, diagnostics: *Diagnostic, ownerToken: *tokens.Token) !usize {
+        try self.consume(tokens.TokenType.Identifier, ownerToken, diagnostics);
+        const strPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const value: values.Value = .{ .obj = @ptrCast(strPtr) };
+        return try self.output.addConstant(alloc, value);
+    }
+
+    // ------------ Statement Parsing functions -------------
+    fn printStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+        const printToken = self.previous;
+        try self.expression(alloc, diagnostic);
+        try self.consume(tokens.TokenType.Semicolon, printToken, diagnostic);
+        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PrintOp), self.previous.line);
+    }
+
+    fn varStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+        const varToken = self.previous;
+        const addr = try self.parseVariable(alloc, diagnostic, varToken);
+        if (self.match(tokens.TokenType.Equals)) {
+            try self.expression(alloc, diagnostic);
+        } else {
+            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.NilOp), self.previous.line);
+        }
+
+        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic);
+        try self.output.writeCode(
+            alloc,
+            @intFromEnum(bc.opCode.DefineGlobalOp),
+            self.previous.line,
+        );
+        try self.output.writeCode(
+            alloc,
+            @intCast(addr),
+            self.previous.line,
+        );
+    }
+
+    fn expressionStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+        try self.expression(alloc, diagnostic);
+        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic);
+        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+    }
+    // ------------ Expression Parsing functions -------------
     fn literal(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Allocator.Error!void {
         _ = diagnostic;
         switch (self.previous.kind) {
@@ -208,7 +271,7 @@ pub const Compiler = struct {
     }
 
     // prefix parsing function for minus
-    fn unary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) (Allocator.Error || Error)!void {
+    fn unary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
         const opTokenType = self.previous.kind;
 
         try self.parsePrecedence(Precedence.Unary, alloc, diagnostic);
@@ -219,7 +282,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn binary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) (Allocator.Error || Error)!void {
+    fn binary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
         const opTokenType = self.previous.kind;
         const curPrec = getRule(opTokenType).prec;
 

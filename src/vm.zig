@@ -18,6 +18,7 @@ pub const VM = struct {
     debugFlag: bool = false,
     stack: vmStack.Stack,
     stringPool: table.Table,
+    globals: table.Table,
     gcAlloc: memory.GCAllocator = .{},
 
     pub const Error = error{
@@ -35,7 +36,7 @@ pub const VM = struct {
         }
 
         pub fn report(self: *Diagnostic) void {
-            print("zlox: RuntimeError: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.ip, self.message });
+            print("zlox: RuntimeError: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.ip - 1, self.message });
         }
 
         fn getLine(self: *const Diagnostic) usize {
@@ -62,6 +63,7 @@ pub const VM = struct {
             .debugFlag = debugFlag,
             .stack = try vmStack.Stack.init(alloc),
             .stringPool = try table.Table.init(alloc),
+            .globals = try table.Table.init(alloc),
         };
     }
 
@@ -70,6 +72,7 @@ pub const VM = struct {
         self.gcAlloc.deinit(alloc);
         self.stack.deinit(alloc);
         self.stringPool.deinit(alloc);
+        self.globals.deinit(alloc);
     }
 
     pub fn setChunk(self: *VM, chunk: *const bcInfo.Chunk) void {
@@ -114,16 +117,59 @@ pub const VM = struct {
                             try self.stack.push(values.Value{ .number = -v.asNum() });
                             continue;
                         }
+                        diagnostics.setContext(self, "negate operation can only have number operands");
                         return Error.RuntimeError;
                     } else {
+                        diagnostics.setContext(self, "Expected value in stack");
                         return Error.CompileError;
                     }
                 },
                 .AddOp, .SubOp, .MultOp, .DivOp => {
                     try self.doBinaryOp(opCode, writer, alloc, diagnostics);
                 },
+                .PrintOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | print: ", .{self.ip - 1});
+                    }
+                    const value = if (self.stack.pop()) |v| v else {
+                        diagnostics.setContext(self, "Expected value in stack");
+                        return Error.CompileError;
+                    };
+                    try writer.print("{f}", .{value});
+                },
+                .NilOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | nilOp: ", .{self.ip - 1});
+                    }
+                    try self.stack.push(values.Value{ .nil = 1 });
+                },
+                .DefineGlobalOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | defGlobal: ", .{self.ip - 1});
+                    }
+                    const value = if (self.stack.pop()) |v| v else {
+                        diagnostics.setContext(self, "Expected value in stack");
+                        return Error.CompileError;
+                    };
+                    const targetConstant = self.chunk.constantSlice[self.advance()];
+                    const defineTarget: *strings.ObjectString = if (targetConstant.isObj()) @ptrCast(@alignCast(targetConstant.asObj())) else {
+                        diagnostics.setContext(self, "Unassignable target");
+                        return Error.CompileError;
+                    };
+                    _ = try self.globals.set(defineTarget, value, alloc);
+                },
+                .PopOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | popOp\n", .{self.ip - 1});
+                    }
+                    if (self.stack.pop() == null) {
+                        diagnostics.setContext(self, "Expected value in stack");
+                        return Error.CompileError;
+                    }
+                },
                 // else => return Error.CompileErr,
             }
+            try writer.flush(); // Needed here to check where the runtimeError actually happened(during execution trace)
         }
     }
 
