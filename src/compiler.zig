@@ -44,6 +44,9 @@ const ruleTable: std.enums.EnumArray(tokens.TokenType, Rule) = .initDefault(.{},
     .Minus = .{ .prefix = Compiler.unary, .infix = Compiler.binary, .prec = .Term },
     .Star = .{ .infix = Compiler.binary, .prec = .Factor },
     .Slash = .{ .infix = Compiler.binary, .prec = .Factor },
+    .Identifier = .{
+        .prefix = Compiler.variable,
+    },
 });
 
 fn getRule(tokenType: tokens.TokenType) Rule {
@@ -198,6 +201,24 @@ pub const Compiler = struct {
         return try self.output.addConstant(alloc, value);
     }
 
+    fn namedVariable(self: *Compiler, nameToken: *tokens.Token, alloc: Allocator, diagnostic: *Diagnostic) !void {
+        _ = diagnostic;
+        const ptrStr = try strings.makeString(nameToken.getLexeme(self.source), nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const value = values.Value{ .obj = @ptrCast(@alignCast(ptrStr)) };
+        const addr = try self.output.addConstant(alloc, value);
+
+        try self.output.writeCode(
+            alloc,
+            @intFromEnum(bc.opCode.GetGlobalOp),
+            self.previous.line,
+        );
+        try self.output.writeCode(
+            alloc,
+            @intCast(addr),
+            self.previous.line,
+        );
+    }
+
     // ------------ Statement Parsing functions -------------
     fn printStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
         const printToken = self.previous;
@@ -268,6 +289,10 @@ pub const Compiler = struct {
             .obj = @ptrCast(objPtr),
         };
         try self.writeConstant(alloc, value);
+    }
+
+    fn variable(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+        try self.namedVariable(self.previous, alloc, diagnostic);
     }
 
     // prefix parsing function for minus

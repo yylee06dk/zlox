@@ -18,7 +18,7 @@ pub const StdInterface = struct {
 
 pub fn main(init: std.process.Init) !void {
     // Setting up machine used during the whole main-scope. The VM has the same life time as the main scope
-    var machine = vm.VM.initSettings(true, init.gpa) catch |err| {
+    var machine = vm.VM.initSettings(false, init.gpa) catch |err| {
         fatalErrorReport(err);
         return;
     };

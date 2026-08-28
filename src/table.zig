@@ -45,6 +45,15 @@ pub const Table = struct {
         return isNewKey;
     }
 
+    pub fn get(self: *const Table, key: *strings.ObjectString) ?values.Value {
+        const pos = self.findEntryPos(key);
+        if (self.baseArray[pos]) |e| {
+            return e.value;
+        } else {
+            return null;
+        }
+    }
+
     pub fn contains(self: *const Table, string: []const u8, hash: u32) ?*strings.ObjectString {
         var expectPos = @mod(hash, self.capacity);
         while (true) : (expectPos = @mod(expectPos + 1, self.capacity)) {

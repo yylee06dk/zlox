@@ -135,7 +135,7 @@ pub const VM = struct {
                         diagnostics.setContext(self, "Expected value in stack");
                         return Error.CompileError;
                     };
-                    try writer.print("{f}", .{value});
+                    try writer.print("{f}\n", .{value});
                 },
                 .NilOp => {
                     if (self.debugFlag) {
@@ -157,6 +157,28 @@ pub const VM = struct {
                         return Error.CompileError;
                     };
                     _ = try self.globals.set(defineTarget, value, alloc);
+                    _ = self.stack.pop();
+                },
+                .GetGlobalOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | getGlobal: ", .{self.ip - 1});
+                    }
+                    const valueAddr = self.advance();
+                    const nameVal = self.chunk.constantSlice[valueAddr];
+                    const nameObjStr = nameBlock: {
+                        if (!nameVal.isObj()) break :nameBlock null;
+                        const valueObj = nameVal.asObj();
+                        if (!valueObj.isString()) break :nameBlock null;
+                        break :nameBlock @as(*strings.ObjectString, @ptrCast(@alignCast(valueObj)));
+                    } orelse {
+                        diagnostics.setContext(self, "Unaccessible variable <should show what was tried to be accessed>");
+                        return Error.CompileError;
+                    };
+                    const value = self.globals.get(nameObjStr) orelse {
+                        diagnostics.setContext(self, "Unknown variable used");
+                        return Error.RuntimeError;
+                    };
+                    try self.stack.push(value);
                 },
                 .PopOp => {
                     if (self.debugFlag) {
