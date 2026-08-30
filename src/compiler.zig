@@ -214,6 +214,8 @@ pub const Compiler = struct {
             try self.blockStatement(alloc, diagnostic);
         } else if (self.match(tokens.TokenType.If)) {
             try self.ifStatement(alloc, diagnostic);
+        } else if (self.match(tokens.TokenType.While)) {
+            try self.whileStatement(alloc, diagnostic);
         } else {
             try self.expressionStatement(alloc, diagnostic);
         }
@@ -325,7 +327,8 @@ pub const Compiler = struct {
     }
 
     fn patchJump(self: *Compiler, patchPos: usize, targetPos: usize) !void {
-        const jumpVal = targetPos - patchPos - 2;
+        // Due to the short read during running the VM offset has a size of 2 diff for true jumping offset
+        const jumpVal = if (targetPos < patchPos) patchPos - targetPos + 2 else targetPos - patchPos - 2;
         if (jumpVal > @as(usize, std.math.maxInt(u16))) {
             return Error.ParseFailed;
         }
@@ -390,7 +393,7 @@ pub const Compiler = struct {
 
     fn ifStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
         const ifToken = self.previous;
-        try self.consume(tokens.TokenType.LeftParen, ifToken, diagnostic, "Expect opening parentheses at");
+        try self.consume(tokens.TokenType.LeftParen, ifToken, diagnostic, "Expect opening parentheses after");
         const leftParenToken = self.previous;
         try self.expression(alloc, diagnostic); // Condition
         try self.consume(tokens.TokenType.RightParen, leftParenToken, diagnostic, "Expect closing parentheses for");
@@ -419,6 +422,23 @@ pub const Compiler = struct {
                 return err;
             };
         }
+    }
+
+    fn whileStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+        const whileToken = self.previous;
+        try self.consume(tokens.TokenType.LeftParen, whileToken, diagnostic, "Expect opening parentheses after");
+        const leftParenToken = self.previous;
+        const conditionStart = self.output.byteCodeList.items.len;
+        try self.expression(alloc, diagnostic); // Condition
+        try self.consume(tokens.TokenType.RightParen, leftParenToken, diagnostic, "Expect closing parentheses for");
+
+        const jmpToEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpIfFalseOp));
+        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        try self.statement(alloc, diagnostic);
+        const jmpToWhile = try self.markJump(alloc, @intFromEnum(bc.opCode.LoopOp));
+        try self.patchJump(jmpToWhile, conditionStart);
+        try self.patchJump(jmpToEnd, self.output.byteCodeList.items.len);
+        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
     }
 
     fn blockStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {

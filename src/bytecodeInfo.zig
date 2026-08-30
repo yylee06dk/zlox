@@ -58,6 +58,13 @@ pub const Chunk = struct {
                 try writer.print("[offset: {d:>3}]\n", .{offset});
                 return 3;
             },
+            .LoopOp => {
+                const upperU8 = @as(u16, self.codeSlice[ip + 1]);
+                const lowerU8 = @as(u16, self.codeSlice[ip + 2]);
+                const offset = upperU8 << 8 | lowerU8;
+                try writer.print("[offset: -{d:>3}]\n", .{offset});
+                return 3;
+            },
             .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .PrintOp, .PopOp, .NilOp => {
                 try writer.print("\n", .{});
                 return 1;

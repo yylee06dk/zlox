@@ -298,6 +298,16 @@ pub const VM = struct {
                         try writer.print("jumped {d:>4}\n", .{short});
                     }
                 },
+                .LoopOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | loop: ", .{self.ip - 1});
+                    }
+                    const short = self.advanceShort();
+                    self.ip -= short;
+                    if (self.debugFlag) {
+                        try writer.print("jumped -{d:>4}\n", .{short});
+                    }
+                },
                 .PopOp => {
                     if (self.debugFlag) {
                         try writer.print("{d:0>4} | popOp: ", .{self.ip - 1});
