@@ -56,11 +56,15 @@ pub fn main(init: std.process.Init) !void {
             print("Usage: <binary> <file_path>\n", .{});
         }
 
-        try runFile(init, filePath, &machine, &stdInterface);
+        runFile(init, filePath, &machine, &stdInterface) catch |err| {
+            fatalErrorReport(err);
+        };
         return;
     }
 
-    try runREPL(init, &machine, &stdInterface);
+    runREPL(init, &machine, &stdInterface) catch |err| {
+        fatalErrorReport(err);
+    };
     return;
 }
 

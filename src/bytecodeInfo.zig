@@ -84,7 +84,13 @@ pub const ByteCodeInfo = struct {
         return .{ .byteCodeList = .empty, .lineList = .empty, .constantList = .empty };
     }
 
-    pub fn deinit(self: *ByteCodeInfo, alloc: Allocator) Allocator.Error!Chunk {
+    pub fn deinit(self: *ByteCodeInfo, alloc: Allocator) void {
+        self.byteCodeList.deinit(alloc);
+        self.lineList.deinit(alloc);
+        self.constantList.deinit(alloc);
+    }
+
+    pub fn toOwnedChunk(self: *ByteCodeInfo, alloc: Allocator) Allocator.Error!Chunk {
         return .{
             .codeSlice = try self.byteCodeList.toOwnedSlice(alloc),
             .lineSlice = try self.lineList.toOwnedSlice(alloc),

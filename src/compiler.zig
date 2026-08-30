@@ -101,6 +101,7 @@ pub const Compiler = struct {
     }
 
     pub fn compileOwnedChunk(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !?bcInfo.Chunk {
+        // errdefer self.output.deinit(alloc);
         // This is double checked since scanner might ignore values
         // This means the input line was not empty so we scanned it, but then it came out empty since it only had errorful contents
         if (self.current.kind == tokens.TokenType.EOF) return null;
@@ -111,7 +112,7 @@ pub const Compiler = struct {
             return Error.ParseFailed;
         }
         // The ownership goes to the caller
-        return try self.output.deinit(alloc);
+        return try self.output.toOwnedChunk(alloc);
     }
 
     const Resolver = struct {
