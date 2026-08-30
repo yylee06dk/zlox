@@ -51,6 +51,13 @@ pub const Chunk = struct {
                 try writer.print("[slot: {d:>3}]\n", .{slot});
                 return 2;
             },
+            .JumpIfFalseOp, .JumpOp => {
+                const upperU8 = @as(u16, self.codeSlice[ip + 1]);
+                const lowerU8 = @as(u16, self.codeSlice[ip + 2]);
+                const offset = upperU8 << 8 | lowerU8;
+                try writer.print("[offset: {d:>3}]\n", .{offset});
+                return 3;
+            },
             .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .PrintOp, .PopOp, .NilOp => {
                 try writer.print("\n", .{});
                 return 1;
@@ -81,6 +88,12 @@ pub const ByteCodeInfo = struct {
     pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: usize) Allocator.Error!void {
         try self.byteCodeList.append(alloc, code);
         try self.lineList.append(alloc, line);
+    }
+
+    pub fn writeCodeAndRemeber(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: usize) Allocator.Error!usize {
+        try self.byteCodeList.append(alloc, code);
+        try self.lineList.append(alloc, line);
+        return self.byteCodeList.len - 1;
     }
 
     pub fn addConstant(self: *ByteCodeInfo, alloc: Allocator, item: values.Value) Allocator.Error!usize {

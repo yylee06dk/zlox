@@ -173,10 +173,21 @@ pub const Scanner = struct {
         const length = self.current - start;
         // Check if keyword
         switch (self.source[start]) {
-            'f' => if (self.checkRest("alse", start, length)) return self.makeToken(length, tokens.TokenType.False),
+            'e' => if (self.checkRest("lse", start, length)) return self.makeToken(length, tokens.TokenType.Else),
+            'f' => {
+                if (length > 1) {
+                    switch (self.source[start + 1]) {
+                        'a' => if (self.checkRest("lse", start + 1, length - 1)) return self.makeToken(length, tokens.TokenType.False),
+                        'o' => if (self.checkRest("r", start + 1, length - 1)) return self.makeToken(length, tokens.TokenType.For),
+                        else => {},
+                    }
+                }
+            },
+            'i' => if (self.checkRest("f", start, length)) return self.makeToken(length, tokens.TokenType.If),
             'n' => if (self.checkRest("il", start, length)) return self.makeToken(length, tokens.TokenType.Nil),
             'p' => if (self.checkRest("rint", start, length)) return self.makeToken(length, tokens.TokenType.Print),
             't' => if (self.checkRest("rue", start, length)) return self.makeToken(length, tokens.TokenType.True),
+            'w' => if (self.checkRest("hile", start, length)) return self.makeToken(length, tokens.TokenType.While),
             'v' => if (self.checkRest("ar", start, length)) return self.makeToken(length, tokens.TokenType.Var),
             else => {},
         }

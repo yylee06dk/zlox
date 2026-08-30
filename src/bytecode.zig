@@ -15,6 +15,8 @@ pub const opCode = enum(u8) {
     DefineLocalOp,
     GetLocalOp,
     SetLocalOp,
+    JumpIfFalseOp,
+    JumpOp,
 
     pub fn toString(self: opCode) []const u8 {
         return switch (self) {
@@ -34,6 +36,8 @@ pub const opCode = enum(u8) {
             .DefineLocalOp => "defLocal",
             .GetLocalOp => "getLocal",
             .SetLocalOp => "setLocal",
+            .JumpIfFalseOp => "jumpIfFalse",
+            .JumpOp => "jump",
         };
     }
 };

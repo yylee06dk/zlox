@@ -212,6 +212,8 @@ pub const Compiler = struct {
             try self.printStatement(alloc, diagnostic);
         } else if (self.match(tokens.TokenType.LeftBrace)) {
             try self.blockStatement(alloc, diagnostic);
+        } else if (self.match(tokens.TokenType.If)) {
+            try self.ifStatement(alloc, diagnostic);
         } else {
             try self.expressionStatement(alloc, diagnostic);
         }
@@ -314,6 +316,24 @@ pub const Compiler = struct {
         );
     }
 
+    fn markJump(self: *Compiler, alloc: Allocator, jmpType: u8) !usize {
+        try self.output.writeCode(alloc, jmpType, self.previous.line);
+        try self.writeBytes(alloc, 0, 0);
+        const jmpValPos = self.output.byteCodeList.items.len - 2;
+        return jmpValPos;
+    }
+
+    fn patchJump(self: *Compiler, patchPos: usize, targetPos: usize) !void {
+        const jumpVal = targetPos - patchPos - 2;
+        if (jumpVal > @as(usize, std.math.maxInt(u16))) {
+            return Error.ParseFailed;
+        }
+        const upperU8: u8 = @intCast(jumpVal >> 8 & 0b11111111);
+        const lowerU8: u8 = @intCast(jumpVal & 0b11111111);
+        self.output.byteCodeList.items[patchPos] = upperU8;
+        self.output.byteCodeList.items[patchPos + 1] = lowerU8;
+    }
+
     // Variable parsing related functions
     fn parseVariable(self: *Compiler, alloc: Allocator, diagnostics: *Diagnostic) !usize {
         try self.consume(tokens.TokenType.Identifier, self.current, diagnostics, "Expected variable name at");
@@ -364,6 +384,39 @@ pub const Compiler = struct {
             try self.writeBytes(alloc, defOp, @intCast(s));
         } else {
             try self.writeBytes(alloc, defOp, @intCast(addr));
+        }
+    }
+
+    fn ifStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+        const ifToken = self.previous;
+        try self.consume(tokens.TokenType.LeftParen, ifToken, diagnostic, "Expect opening parentheses at");
+        const leftParenToken = self.previous;
+        try self.expression(alloc, diagnostic); // Condition
+        try self.consume(tokens.TokenType.RightParen, leftParenToken, diagnostic, "Expect closing parentheses for");
+
+        const thenJmpPos = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpIfFalseOp));
+
+        // then block
+        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        try self.statement(alloc, diagnostic);
+
+        // Eagerly match else block
+        const hasElse = self.match(tokens.TokenType.Else);
+        const elseToken = self.previous;
+        const elseJmpPos: ?usize = if (hasElse) try self.markJump(alloc, @intFromEnum(bc.opCode.JumpOp)) else null;
+
+        self.patchJump(thenJmpPos, self.output.byteCodeList.items.len) catch |err| {
+            diagnostic.setContext(ifToken, "Too long jump(not represantable with 16bits)");
+            return err;
+        };
+
+        if (elseJmpPos) |e| {
+            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+            try self.statement(alloc, diagnostic);
+            self.patchJump(e, self.output.byteCodeList.items.len) catch |err| {
+                diagnostic.setContext(elseToken, "Too long jump(not represantable with 16bits)");
+                return err;
+            };
         }
     }
 

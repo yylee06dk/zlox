@@ -9,7 +9,10 @@ const compile = @import("compiler.zig");
 const Allocator = std.mem.Allocator;
 const print = std.debug.print;
 
-const DebugMode = true;
+const DebugMode = false;
+const DebugVM = DebugMode and true;
+const DebugChunk = DebugMode and true;
+const DebugGC = DebugMode and true;
 
 pub const StdInterface = struct {
     stdin: *std.Io.Reader,
@@ -18,7 +21,7 @@ pub const StdInterface = struct {
 
 pub fn main(init: std.process.Init) !void {
     // Setting up machine used during the whole main-scope. The VM has the same life time as the main scope
-    var machine = vm.VM.initSettings(DebugMode, init.gpa) catch |err| {
+    var machine = vm.VM.initSettings(DebugMode or DebugVM, init.gpa) catch |err| {
         fatalErrorReport(err);
         return;
     };
@@ -131,7 +134,7 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
         else => return err, // Fatal errors can just be propagated
     } orelse return; // Nothing to compile.
     defer chunk.deinit(init.gpa);
-    if (true) {
+    if (DebugMode or DebugChunk) {
         try chunk.printChunk("debugging :)", writer);
     }
 
@@ -145,7 +148,7 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
         },
         else => return err, // Fatal errors can just be propagated
     };
-    if (DebugMode) {
+    if (DebugMode or DebugGC) {
         try writer.print("==== GC state ====\n{f}\n", .{machine.gcAlloc});
     }
     try writer.flush();

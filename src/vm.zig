@@ -266,12 +266,44 @@ pub const VM = struct {
                     }
                     self.stack.stackArray[slot] = newVal;
                 },
+
+                .JumpIfFalseOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | jumpIfFalse: ", .{self.ip - 1});
+                    }
+                    const short = self.advanceShort();
+                    const condition = if (self.stack.peek(0)) |v| v else {
+                        diagnostics.setContext(self, "Expected value in stack");
+                        return Error.CompileError;
+                    };
+                    const conditionBool = if (condition.isBool()) condition.asBool() else {
+                        diagnostics.setContext(self, "Expected boolean value in stack");
+                        return Error.RuntimeError;
+                    };
+                    if (!conditionBool) {
+                        self.ip += short;
+                    }
+                    const trueJump = if (!conditionBool) short else 0;
+                    if (self.debugFlag) {
+                        try writer.print("condition: {}, jumped {d:>4}\n", .{ conditionBool, trueJump });
+                    }
+                },
+                .JumpOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | jump: ", .{self.ip - 1});
+                    }
+                    const short = self.advanceShort();
+                    self.ip += short;
+                    if (self.debugFlag) {
+                        try writer.print("jumped {d:>4}\n", .{short});
+                    }
+                },
                 .PopOp => {
                     if (self.debugFlag) {
                         try writer.print("{d:0>4} | popOp: ", .{self.ip - 1});
                     }
                     if (self.stack.pop()) |v| {
-                        try writer.print("{f}\n", .{v});
+                        if (self.debugFlag) try writer.print("{f}\n", .{v});
                     } else {
                         diagnostics.setContext(self, "Expected value in stack");
                         return Error.CompileError;
@@ -399,5 +431,12 @@ pub const VM = struct {
     fn advance(self: *VM) u8 {
         self.ip += 1;
         return self.chunk.codeSlice[self.ip - 1];
+    }
+    fn advanceShort(self: *VM) u16 {
+        self.ip += 2;
+        const upperU8 = @as(u16, self.chunk.codeSlice[self.ip - 2]);
+        const lowerU8 = @as(u16, self.chunk.codeSlice[self.ip - 1]);
+        const offset: u16 = upperU8 << 8 | lowerU8;
+        return offset;
     }
 };

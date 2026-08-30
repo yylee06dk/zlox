@@ -27,6 +27,11 @@ pub const TokenType = enum {
     Nil,
     Print,
     Var,
+
+    If,
+    Else,
+    While,
+    For,
     EOF,
 
     pub fn toString(self: TokenType) []const u8 {
@@ -56,6 +61,10 @@ pub const TokenType = enum {
             .Nil => "<nil>",
             .Print => "print",
             .Var => "var",
+            .If => "if",
+            .Else => "else",
+            .Whlie => "while",
+            .For => "for",
             .EOF => "EOF",
         };
     }
