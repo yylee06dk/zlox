@@ -9,7 +9,7 @@ const vm = @import("vm.zig");
 
 const Allocator = std.mem.Allocator;
 const Errors = Allocator.Error || Compiler.Error;
-const ruleFunc = *const fn (*Compiler, Allocator, *Compiler.Diagnostic) Errors!void;
+const ruleFunc = *const fn (*Compiler, Allocator, *Compiler.Diagnostic, bool) Errors!void;
 
 const print = std.debug.print;
 
@@ -232,7 +232,8 @@ pub const Compiler = struct {
             return Error.ParseFailed;
         };
 
-        try prefix(self, alloc, diagnostic);
+        const canAssign = @intFromEnum(prec) <= @intFromEnum(Precedence.Assignment);
+        try prefix(self, alloc, diagnostic, canAssign);
 
         while (!self.isAtEnd() and @intFromEnum(getRule(self.current.kind).prec) >= @intFromEnum(prec)) {
             self.advance(); // We in this loop means we gonna parse the one we checked above
@@ -241,7 +242,7 @@ pub const Compiler = struct {
                 return Error.ParseFailed;
             }; // Really bad since we entered the while loop but don't have a matching infix operator
 
-            try infix(self, alloc, diagnostic);
+            try infix(self, alloc, diagnostic, canAssign);
         }
     }
     // The basic blocks of the compiling process. It's like a uniform layer for compiling
@@ -436,7 +437,8 @@ pub const Compiler = struct {
         try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
     }
     // ------------ Expression Parsing functions -------------
-    fn literal(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Allocator.Error!void {
+    fn literal(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Allocator.Error!void {
+        _ = canAssign;
         _ = diagnostic;
         switch (self.previous.kind) {
             .True => {
@@ -455,13 +457,15 @@ pub const Compiler = struct {
         }
     }
 
-    fn grouping(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+    fn grouping(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Errors!void {
+        _ = canAssign;
         const leftParen = self.previous;
         try self.expression(alloc, diagnostic);
         try self.consume(tokens.TokenType.RightParen, leftParen, diagnostic, "Unclosed parentheses at");
     }
 
-    fn number(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Allocator.Error!void {
+    fn number(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Allocator.Error!void {
+        _ = canAssign;
         _ = diagnostic;
         const lexeme = self.previous.getLexeme(self.source);
         const num = std.fmt.parseFloat(f64, lexeme) catch unreachable;
@@ -469,7 +473,8 @@ pub const Compiler = struct {
         try self.writeConstant(alloc, value);
     }
 
-    fn string(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Allocator.Error!void {
+    fn string(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Allocator.Error!void {
+        _ = canAssign;
         _ = diagnostic;
         const objPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
         const value = values.Value{
@@ -478,7 +483,7 @@ pub const Compiler = struct {
         try self.writeConstant(alloc, value);
     }
 
-    fn variable(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+    fn variable(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) !void {
         const isLocal = self.resolver.scopeDepth > 0;
 
         const nameToken = self.previous;
@@ -492,7 +497,7 @@ pub const Compiler = struct {
         const setOp = @intFromEnum(if (isLocal) bc.opCode.SetLocalOp else bc.opCode.SetGlobalOp);
         const getOp = @intFromEnum(if (isLocal and resolved) bc.opCode.GetLocalOp else bc.opCode.GetGlobalOp);
 
-        if (self.match(tokens.TokenType.Equals)) {
+        if (self.match(tokens.TokenType.Equals) and canAssign) {
             try self.expression(alloc, diagnostic);
             try self.writeBytes(alloc, setOp, s);
         } else {
@@ -501,7 +506,8 @@ pub const Compiler = struct {
     }
 
     // prefix parsing function for minus
-    fn unary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+    fn unary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Errors!void {
+        _ = canAssign;
         const opTokenType = self.previous.kind;
 
         try self.parsePrecedence(Precedence.Unary, alloc, diagnostic);
@@ -512,7 +518,8 @@ pub const Compiler = struct {
         }
     }
 
-    fn binary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+    fn binary(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Errors!void {
+        _ = canAssign;
         const opTokenType = self.previous.kind;
         const curPrec = getRule(opTokenType).prec;
 
