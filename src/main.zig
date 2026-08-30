@@ -18,7 +18,7 @@ pub const StdInterface = struct {
 
 pub fn main(init: std.process.Init) !void {
     // Setting up machine used during the whole main-scope. The VM has the same life time as the main scope
-    var machine = vm.VM.initSettings(false, init.gpa) catch |err| {
+    var machine = vm.VM.initSettings(DebugMode, init.gpa) catch |err| {
         fatalErrorReport(err);
         return;
     };
@@ -121,7 +121,8 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
 
     // Compiler setup
     var compileDiagnostic = compile.Compiler.Diagnostic{};
-    var compiler = compile.Compiler.init(source, tokenList, machine);
+    var compiler = try compile.Compiler.init(source, tokenList, machine, init.gpa);
+    defer compiler.deinit(init.gpa);
     var chunk = compiler.compileOwnedChunk(init.gpa, &compileDiagnostic) catch |err| switch (err) {
         error.ParseFailed => {
             compileDiagnostic.report(source);
@@ -130,6 +131,9 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
         else => return err, // Fatal errors can just be propagated
     } orelse return; // Nothing to compile.
     defer chunk.deinit(init.gpa);
+    if (true) {
+        try chunk.printChunk("debugging :)", writer);
+    }
 
     // VM setup
     var vmDiagnostic = vm.VM.Diagnostic{};
@@ -141,6 +145,8 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
         },
         else => return err, // Fatal errors can just be propagated
     };
-    try writer.print("==== GC state ====\n{f}\n", .{machine.gcAlloc});
+    if (DebugMode) {
+        try writer.print("==== GC state ====\n{f}\n", .{machine.gcAlloc});
+    }
     try writer.flush();
 }

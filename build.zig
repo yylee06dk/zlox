@@ -60,8 +60,8 @@ pub fn build(b: *std.Build) void {
     // don't need and to put everything under a single module.
     const exe = b.addExecutable(.{
         .name = "zlox",
-        .use_lld = true,
-        .use_llvm = true,
+        .use_lld = false,
+        .use_llvm = false,
         .root_module = b.createModule(.{
             // b.createModule defines a new module just like b.addModule but,
             // unlike b.addModule, it does not expose the module to consumers of
@@ -92,6 +92,23 @@ pub fn build(b: *std.Build) void {
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
 
+    // Keep the slower LLVM build separate; VS Code invokes this before LLDB.
+    const llvm_exe = b.addExecutable(.{
+        .name = "zlox",
+        .use_lld = true,
+        .use_llvm = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zlox", .module = mod },
+            },
+        }),
+    });
+    const llvm_step = b.step("llvm", "Build with LLVM for debugging");
+    llvm_step.dependOn(&b.addInstallArtifact(llvm_exe, .{}).step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
@@ -117,6 +134,13 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
+
+    // Run the scratch program directly with the fast native backend.
+    const run_test_step = b.step("run-test", "Run test.txt");
+    const run_test_cmd = b.addRunArtifact(exe);
+    run_test_cmd.addFileArg(b.path("test.txt"));
+    run_test_cmd.step.dependOn(b.getInstallStep());
+    run_test_step.dependOn(&run_test_cmd.step);
 
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to

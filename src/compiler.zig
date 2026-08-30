@@ -47,6 +47,9 @@ const ruleTable: std.enums.EnumArray(tokens.TokenType, Rule) = .initDefault(.{},
     .Identifier = .{
         .prefix = Compiler.variable,
     },
+    .LeftParen = .{
+        .prefix = Compiler.grouping,
+    },
 });
 
 fn getRule(tokenType: tokens.TokenType) Rule {
@@ -59,6 +62,7 @@ pub const Compiler = struct {
     previous: *tokens.Token, // Direct dereference
     current: *tokens.Token,
     output: bcInfo.ByteCodeInfo, // Just an intermediate data structure used
+    resolver: Resolver,
     targetVM: *vm.VM, // We write info needed at runtime that's resolved at compile time
 
     const Error = error{
@@ -80,15 +84,20 @@ pub const Compiler = struct {
         }
     };
 
-    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM) Compiler {
+    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, alloc: Allocator) !Compiler {
         return .{
             .source = source,
             .tokenList = tokenList,
             .previous = &(tokenList[0]),
             .current = &(tokenList[0]),
             .output = bcInfo.ByteCodeInfo.init(), // 72bytes
+            .resolver = try Resolver.init(alloc),
             .targetVM = targetVM,
         };
+    }
+
+    pub fn deinit(self: *Compiler, alloc: Allocator) void {
+        self.resolver.deinit(alloc);
     }
 
     pub fn compileOwnedChunk(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !?bcInfo.Chunk {
@@ -96,7 +105,7 @@ pub const Compiler = struct {
         // This means the input line was not empty so we scanned it, but then it came out empty since it only had errorful contents
         if (self.current.kind == tokens.TokenType.EOF) return null;
         while (!self.isAtEnd()) {
-            try self.statement(alloc, diagnostic);
+            try self.declaration(alloc, diagnostic);
         }
         if (self.current.kind != tokens.TokenType.EOF) {
             return Error.ParseFailed;
@@ -105,11 +114,104 @@ pub const Compiler = struct {
         return try self.output.deinit(alloc);
     }
 
-    fn statement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+    const Resolver = struct {
+        scopeDepth: usize,
+        localCount: usize,
+        locals: []Local, // of length 256 (MAX_U8)
+
+        const Local = struct {
+            name: *strings.ObjectString,
+            depth: usize,
+        };
+
+        pub fn init(alloc: Allocator) !Resolver {
+            return .{
+                .scopeDepth = 0,
+                .localCount = 0,
+                .locals = try alloc.alloc(Local, @as(usize, std.math.maxInt(u8)) + 1),
+            };
+        }
+
+        pub fn deinit(self: *Resolver, alloc: Allocator) void {
+            alloc.free(self.locals);
+        }
+    };
+
+    // Resolver related functions
+    fn beginScope(self: *Compiler) void {
+        self.resolver.scopeDepth += 1;
+    }
+
+    fn endScope(self: *Compiler, alloc: Allocator) !void {
+        if (self.resolver.scopeDepth == 0) unreachable;
+
+        // Cleanup the scope
+        var idx = self.resolver.localCount;
+        while (idx > 0) {
+            idx -= 1;
+            const local = self.resolver.locals[idx];
+            if (local.depth < self.resolver.scopeDepth) {
+                break;
+            }
+
+            self.resolver.localCount -= 1;
+            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        }
+        self.resolver.scopeDepth -= 1;
+    }
+
+    pub fn declareVariable(self: *Compiler, name: *strings.ObjectString, diagnostic: *Diagnostic) !void {
+        if (self.resolver.localCount == std.math.maxInt(u8) + 1) {
+            diagnostic.setContext(self.previous, "Too many local variables declared(max of 256) at");
+            return Error.ParseFailed;
+        }
+
+        var idx = self.resolver.localCount;
+        while (idx > 0) {
+            idx -= 1;
+            const local = self.resolver.locals[idx];
+            if (local.depth < self.resolver.scopeDepth) break;
+            if (local.name == name) {
+                diagnostic.setContext(self.previous, "Redeclare of variable in same scope at");
+                return Error.ParseFailed;
+            }
+        }
+
+        self.resolver.locals[self.resolver.localCount] = .{
+            .name = name,
+            .depth = self.resolver.scopeDepth,
+        };
+        self.resolver.localCount += 1;
+    }
+
+    fn resolveLocal(self: *Compiler, name: *strings.ObjectString) ?usize {
+        var idx = self.resolver.localCount;
+        // Search for it!
+        while (idx > 0) {
+            idx -= 1;
+            const local = self.resolver.locals[idx];
+            if (local.name == name) {
+                return idx;
+            }
+        }
+        return null;
+    }
+    // Resolver related functions
+
+    // The basic blocks of the compiling process. It's like a abstraction layer
+    fn declaration(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+        if (self.match(tokens.TokenType.Var)) {
+            try self.varStatement(alloc, diagnostic);
+        } else {
+            try self.statement(alloc, diagnostic);
+        }
+    }
+
+    fn statement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
         if (self.match(tokens.TokenType.Print)) {
             try self.printStatement(alloc, diagnostic);
-        } else if (self.match(tokens.TokenType.Var)) {
-            try self.varStatement(alloc, diagnostic);
+        } else if (self.match(tokens.TokenType.LeftBrace)) {
+            try self.blockStatement(alloc, diagnostic);
         } else {
             try self.expressionStatement(alloc, diagnostic);
         }
@@ -119,6 +221,7 @@ pub const Compiler = struct {
         try self.parsePrecedence(Precedence.Assignment, alloc, diagnostic);
     }
 
+    // climbs the precedence tree
     fn parsePrecedence(self: *Compiler, prec: Precedence, alloc: Allocator, diagnostic: *Diagnostic) !void {
         self.advance();
         const prevTokenType = self.previous.kind;
@@ -139,7 +242,9 @@ pub const Compiler = struct {
             try infix(self, alloc, diagnostic);
         }
     }
+    // The basic blocks of the compiling process. It's like a uniform layer for compiling
 
+    // Abstracting out basic -atom-like- steps
     fn advance(self: *Compiler) void {
         // t("1cur{}\n", .{self.current.kind});
         // t("1prev{}\n", .{self.previous.kind});
@@ -158,9 +263,9 @@ pub const Compiler = struct {
         return self.current.kind == tokens.TokenType.EOF;
     }
 
-    fn consume(self: *Compiler, expect: tokens.TokenType, owner: *tokens.Token, diagnostics: *Diagnostic) !void {
+    fn consume(self: *Compiler, expect: tokens.TokenType, owner: *tokens.Token, diagnostics: *Diagnostic, message: []const u8) !void {
         if (self.isAtEnd() or self.current.kind != expect) {
-            diagnostics.setContext(owner, "Expected something.. at");
+            diagnostics.setContext(owner, message);
             return Error.ParseFailed;
         }
         self.advance();
@@ -174,7 +279,9 @@ pub const Compiler = struct {
         }
         return false;
     }
+    // Basic functions end
 
+    // this currently has too niche of an usage
     fn writeConstant(self: *Compiler, alloc: Allocator, value: values.Value) Allocator.Error!void {
         // Only causes Oom error
         const addr = try self.output.addConstant(alloc, value);
@@ -194,64 +301,85 @@ pub const Compiler = struct {
         );
     }
 
-    fn parseVariable(self: *Compiler, alloc: Allocator, diagnostics: *Diagnostic, ownerToken: *tokens.Token) !usize {
-        try self.consume(tokens.TokenType.Identifier, ownerToken, diagnostics);
+    fn writeBytes(self: *Compiler, alloc: Allocator, fstByte: u8, scdByte: u8) !void {
+        try self.output.writeCode(
+            alloc,
+            fstByte,
+            self.previous.line,
+        );
+        try self.output.writeCode(
+            alloc,
+            scdByte,
+            self.previous.line,
+        );
+    }
+
+    // Variable parsing related functions
+    fn parseVariable(self: *Compiler, alloc: Allocator, diagnostics: *Diagnostic) !usize {
+        try self.consume(tokens.TokenType.Identifier, self.current, diagnostics, "Expected variable name at");
         const strPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
         const value: values.Value = .{ .obj = @ptrCast(strPtr) };
         return try self.output.addConstant(alloc, value);
     }
 
-    fn namedVariable(self: *Compiler, nameToken: *tokens.Token, alloc: Allocator, diagnostic: *Diagnostic) !void {
-        _ = diagnostic;
+    fn namedVariable(self: *Compiler, nameToken: *tokens.Token, alloc: Allocator) !usize {
         const ptrStr = try strings.makeString(nameToken.getLexeme(self.source), nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
         const value = values.Value{ .obj = @ptrCast(@alignCast(ptrStr)) };
-        const addr = try self.output.addConstant(alloc, value);
-
-        try self.output.writeCode(
-            alloc,
-            @intFromEnum(bc.opCode.GetGlobalOp),
-            self.previous.line,
-        );
-        try self.output.writeCode(
-            alloc,
-            @intCast(addr),
-            self.previous.line,
-        );
+        return try self.output.addConstant(alloc, value);
     }
 
     // ------------ Statement Parsing functions -------------
     fn printStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
         const printToken = self.previous;
         try self.expression(alloc, diagnostic);
-        try self.consume(tokens.TokenType.Semicolon, printToken, diagnostic);
+        try self.consume(tokens.TokenType.Semicolon, printToken, diagnostic, "Expected semicolon at");
         try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PrintOp), self.previous.line);
     }
 
     fn varStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
-        const varToken = self.previous;
-        const addr = try self.parseVariable(alloc, diagnostic, varToken);
+        const isLocal = self.resolver.scopeDepth > 0;
+        const defOp = @intFromEnum(if (isLocal) bc.opCode.DefineLocalOp else bc.opCode.DefineGlobalOp);
+
+        try self.consume(tokens.TokenType.Identifier, self.current, diagnostic, "Expected variable name at");
+
+        const strPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const value: values.Value = .{ .obj = @ptrCast(strPtr) };
+        // Add the variable name to constant list
+        const addr = try self.output.addConstant(alloc, value);
+        // Add the variable itself to resolver
+        if (self.resolver.scopeDepth > 0) { //local!
+            try self.declareVariable(strPtr, diagnostic);
+        }
+
+        // Check if it has initializer
         if (self.match(tokens.TokenType.Equals)) {
             try self.expression(alloc, diagnostic);
         } else {
             try self.output.writeCode(alloc, @intFromEnum(bc.opCode.NilOp), self.previous.line);
         }
 
-        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic);
-        try self.output.writeCode(
-            alloc,
-            @intFromEnum(bc.opCode.DefineGlobalOp),
-            self.previous.line,
-        );
-        try self.output.writeCode(
-            alloc,
-            @intCast(addr),
-            self.previous.line,
-        );
+        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon at");
+
+        if (self.resolveLocal(strPtr)) |s| {
+            try self.writeBytes(alloc, defOp, @intCast(s));
+        } else {
+            try self.writeBytes(alloc, defOp, @intCast(addr));
+        }
+    }
+
+    fn blockStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+        const leftBrace = self.previous;
+        self.beginScope();
+        while (self.current.kind != tokens.TokenType.RightBrace and !self.isAtEnd()) {
+            try self.declaration(alloc, diagnostic);
+        }
+        try self.consume(tokens.TokenType.RightBrace, leftBrace, diagnostic, "Unclosed block at");
+        try self.endScope(alloc);
     }
 
     fn expressionStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
         try self.expression(alloc, diagnostic);
-        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic);
+        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon at");
         try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
     }
     // ------------ Expression Parsing functions -------------
@@ -274,6 +402,12 @@ pub const Compiler = struct {
         }
     }
 
+    fn grouping(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+        const leftParen = self.previous;
+        try self.expression(alloc, diagnostic);
+        try self.consume(tokens.TokenType.RightParen, leftParen, diagnostic, "Unclosed parentheses at");
+    }
+
     fn number(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Allocator.Error!void {
         _ = diagnostic;
         const lexeme = self.previous.getLexeme(self.source);
@@ -292,7 +426,25 @@ pub const Compiler = struct {
     }
 
     fn variable(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
-        try self.namedVariable(self.previous, alloc, diagnostic);
+        const isLocal = self.resolver.scopeDepth > 0;
+
+        const nameToken = self.previous;
+        const ptrStr = try strings.makeString(nameToken.getLexeme(self.source), nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const value = values.Value{ .obj = @ptrCast(@alignCast(ptrStr)) };
+        const addr = try self.output.addConstant(alloc, value);
+        const slot = self.resolveLocal(ptrStr);
+        const resolved = slot != null;
+        const s = @as(u8, @intCast(if (slot) |s| s else addr));
+
+        const setOp = @intFromEnum(if (isLocal) bc.opCode.SetLocalOp else bc.opCode.SetGlobalOp);
+        const getOp = @intFromEnum(if (isLocal and resolved) bc.opCode.GetLocalOp else bc.opCode.GetGlobalOp);
+
+        if (self.match(tokens.TokenType.Equals)) {
+            try self.expression(alloc, diagnostic);
+            try self.writeBytes(alloc, setOp, s);
+        } else {
+            try self.writeBytes(alloc, getOp, s);
+        }
     }
 
     // prefix parsing function for minus

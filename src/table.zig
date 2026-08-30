@@ -42,6 +42,7 @@ pub const Table = struct {
         const isNewKey = self.baseArray[idx] == null;
 
         self.baseArray[idx] = entry;
+        self.count += 1;
         return isNewKey;
     }
 

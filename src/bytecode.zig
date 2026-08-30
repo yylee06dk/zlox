@@ -11,6 +11,10 @@ pub const opCode = enum(u8) {
     NilOp,
     DefineGlobalOp,
     GetGlobalOp,
+    SetGlobalOp,
+    DefineLocalOp,
+    GetLocalOp,
+    SetLocalOp,
 
     pub fn toString(self: opCode) []const u8 {
         return switch (self) {
@@ -23,8 +27,13 @@ pub const opCode = enum(u8) {
             .DivOp => "div",
             .PrintOp => "print",
             .PopOp => "pop",
+            .NilOp => "nilOp",
             .DefineGlobalOp => "defGlobal",
             .GetGlobalOp => "getGlobal",
+            .SetGlobalOp => "setGlobal",
+            .DefineLocalOp => "defLocal",
+            .GetLocalOp => "getLocal",
+            .SetLocalOp => "setLocal",
         };
     }
 };

@@ -84,6 +84,8 @@ pub const Scanner = struct {
             '/' => return self.makeToken(1, tokens.TokenType.Slash),
             '(' => return self.makeToken(1, tokens.TokenType.LeftParen),
             ')' => return self.makeToken(1, tokens.TokenType.RightParen),
+            '{' => return self.makeToken(1, tokens.TokenType.LeftBrace),
+            '}' => return self.makeToken(1, tokens.TokenType.RightBrace),
             ';' => return self.makeToken(1, tokens.TokenType.Semicolon),
             '!' => {
                 const hasEqual = self.match('=');

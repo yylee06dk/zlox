@@ -96,7 +96,9 @@ pub const VM = struct {
                     }
                 },
                 .ConstantOp => {
-                    try writer.print("{d:0>4} | constant: ", .{self.ip - 1});
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | constant: ", .{self.ip - 1});
+                    }
                     const valueAddr = self.advance();
                     const value = self.chunk.constantSlice[valueAddr];
                     try self.stack.push(value);
@@ -139,7 +141,7 @@ pub const VM = struct {
                 },
                 .NilOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | nilOp: ", .{self.ip - 1});
+                        try writer.print("{d:0>4} | nilOp \n", .{self.ip - 1});
                     }
                     try self.stack.push(values.Value{ .nil = 1 });
                 },
@@ -157,6 +159,9 @@ pub const VM = struct {
                         return Error.CompileError;
                     };
                     _ = try self.globals.set(defineTarget, value, alloc);
+                    if (self.debugFlag) {
+                        try writer.print("{s}: {f}\n", .{ defineTarget.getString(), value });
+                    }
                     _ = self.stack.pop();
                 },
                 .GetGlobalOp => {
@@ -178,13 +183,96 @@ pub const VM = struct {
                         diagnostics.setContext(self, "Unknown variable used");
                         return Error.RuntimeError;
                     };
+                    if (self.debugFlag) {
+                        try writer.print("got {f} from {s}\n", .{ value, nameObjStr.getString() });
+                    }
                     try self.stack.push(value);
+                },
+                .SetGlobalOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | setGlobal: ", .{self.ip - 1});
+                    }
+                    const valueAddr = self.advance();
+                    const nameVal = self.chunk.constantSlice[valueAddr];
+                    const nameObjStr = nameBlock: {
+                        if (!nameVal.isObj()) break :nameBlock null;
+                        const valueObj = nameVal.asObj();
+                        if (!valueObj.isString()) break :nameBlock null;
+                        break :nameBlock @as(*strings.ObjectString, @ptrCast(@alignCast(valueObj)));
+                    } orelse {
+                        diagnostics.setContext(self, "Unaccessible variable <should show what was tried to be accessed>");
+                        return Error.RuntimeError;
+                    };
+                    const assignVal = if (self.stack.peek(0)) |v| v else {
+                        diagnostics.setContext(self, "Expected value in stack");
+                        return Error.CompileError;
+                    };
+                    const oldVal = if (self.globals.get(nameObjStr)) |v| v else {
+                        diagnostics.setContext(self, "Assignment to undeclared variable");
+                        return Error.RuntimeError;
+                    };
+                    // Don't check if it's a re-define
+                    _ = try self.globals.set(nameObjStr, assignVal, alloc);
+                    if (self.debugFlag) {
+                        try writer.print("{s}: {f} -> {f}\n", .{ nameObjStr.getString(), oldVal, assignVal });
+                    }
+                },
+                .DefineLocalOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | defLocal: ", .{self.ip - 1});
+                    }
+                    const slot = self.advance();
+                    if (slot >= self.stack.length) {
+                        diagnostics.setContext(self, "local variable not found in define stage, should be resolved in compile stage");
+                        return Error.CompileError;
+                    }
+                    const value = self.stack.stackArray[slot];
+                    if (self.debugFlag) {
+                        try writer.print("{d:>3}: {f}\n", .{ slot, value });
+                    }
+                },
+                .GetLocalOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | getLocal: ", .{self.ip - 1});
+                    }
+                    const slot = self.advance();
+                    if (slot >= self.stack.length) {
+                        diagnostics.setContext(self, "local variable not found in get stage, should be resolved in compile stage");
+                        return Error.CompileError;
+                    }
+
+                    const value = self.stack.stackArray[slot];
+                    try self.stack.push(value);
+                    if (self.debugFlag) {
+                        try writer.print("{d:>3}: {f}\n", .{ slot, value });
+                    }
+                },
+                .SetLocalOp => {
+                    if (self.debugFlag) {
+                        try writer.print("{d:0>4} | setLocal: ", .{self.ip - 1});
+                    }
+                    const slot = self.advance();
+                    if (slot >= self.stack.length) {
+                        diagnostics.setContext(self, "local variable not found in set stage, should be resolved in compile stage");
+                        return Error.CompileError;
+                    }
+
+                    const newVal = if (self.stack.peek(0)) |v| v else {
+                        diagnostics.setContext(self, "Expected value in stack");
+                        return Error.CompileError;
+                    };
+                    if (self.debugFlag) {
+                        try writer.print("slot:{d:>3} : {f} -> {f}\n", .{ slot, self.stack.stackArray[slot], newVal });
+                    }
+                    self.stack.stackArray[slot] = newVal;
                 },
                 .PopOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | popOp\n", .{self.ip - 1});
+                        try writer.print("{d:0>4} | popOp: ", .{self.ip - 1});
                     }
-                    if (self.stack.pop() == null) {
+                    if (self.stack.pop()) |v| {
+                        try writer.print("{f}\n", .{v});
+                    } else {
                         diagnostics.setContext(self, "Expected value in stack");
                         return Error.CompileError;
                     }
@@ -192,6 +280,9 @@ pub const VM = struct {
                 // else => return Error.CompileErr,
             }
             try writer.flush(); // Needed here to check where the runtimeError actually happened(during execution trace)
+        }
+        if (self.debugFlag) {
+            try writer.print("==== VM Execute Trace ====\n", .{});
         }
     }
 

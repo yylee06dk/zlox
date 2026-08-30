@@ -20,6 +20,43 @@ pub const Chunk = struct {
         alloc.free(self.lineSlice);
         alloc.free(self.constantSlice);
     }
+
+    pub fn printChunk(self: *const Chunk, name: []const u8, writer: *std.Io.Writer) !void {
+        var ip: usize = 0; // instruction pointer
+        var curLine: usize = 0;
+        try writer.print("==== {s} ====\n", .{name});
+        try writer.print("BYTE | LINE | --------\n", .{});
+        while (ip < self.codeSlice.len) {
+            curLine = self.lineSlice[ip];
+            const offset = try self.printSingleInstruction(ip, writer, curLine);
+            ip += offset;
+        }
+        try writer.print("==== {s} ====\n", .{name});
+        try writer.flush();
+    }
+
+    fn printSingleInstruction(self: *const Chunk, ip: usize, writer: *std.Io.Writer, curLine: usize) !usize {
+        const curCode: bc.opCode = @enumFromInt(self.codeSlice[ip]);
+
+        try writer.print("{d:0>4} | {d:>4} : {s} ", .{ ip, curLine, curCode.toString() });
+        switch (curCode) {
+            .ConstantOp, .DefineGlobalOp, .GetGlobalOp, .SetGlobalOp => {
+                const constant_idx = self.codeSlice[ip + 1];
+                const constant = self.constantSlice[constant_idx];
+                try writer.print("[addr: {d:>3} -> {f}]\n", .{ constant_idx, constant });
+                return 2;
+            },
+            .DefineLocalOp, .GetLocalOp, .SetLocalOp => {
+                const slot = self.codeSlice[ip + 1];
+                try writer.print("[slot: {d:>3}]\n", .{slot});
+                return 2;
+            },
+            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .PrintOp, .PopOp, .NilOp => {
+                try writer.print("\n", .{});
+                return 1;
+            },
+        }
+    }
 };
 
 pub const ByteCodeInfo = struct {
@@ -70,13 +107,18 @@ pub const ByteCodeInfo = struct {
 
         try writer.print("{d:0>4} | {d:>4} : ", .{ ip, curLine });
         switch (curCode) {
-            .ConstantOp => {
+            .ConstantOp, .DefineGlobalOp, .GetGlobalOp, .SetGlobalOp => {
                 const constant_idx = self.byteCodeList.items[ip + 1];
                 const constant = self.constantList.items[constant_idx];
                 try writer.print("{s} {d:>3} '{f}'\n", .{ curCode.toString(), constant_idx, constant });
                 return 2;
             },
-            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp => {
+            .DefineLocalOp, .GetLocalOp, .SetLocalOp => {
+                const slot = self.byteCodeList.items[ip + 1];
+                try writer.print("{s} {d:>3}\n", .{ curCode.toString(), slot });
+                return 2;
+            },
+            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .PrintOp, .PopOp, .NilOp => {
                 try writer.print("{s}\n", .{curCode.toString()});
                 return 1;
             },
