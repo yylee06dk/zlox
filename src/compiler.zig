@@ -217,6 +217,8 @@ pub const Compiler = struct {
             try self.ifStatement(alloc, diagnostic);
         } else if (self.match(tokens.TokenType.While)) {
             try self.whileStatement(alloc, diagnostic);
+        } else if (self.match(tokens.TokenType.For)) {
+            try self.forStatement(alloc, diagnostic);
         } else {
             try self.expressionStatement(alloc, diagnostic);
         }
@@ -440,6 +442,62 @@ pub const Compiler = struct {
         try self.patchJump(jmpToWhile, conditionStart);
         try self.patchJump(jmpToEnd, self.output.byteCodeList.items.len);
         try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+    }
+
+    fn forStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+        self.beginScope();
+        const forToken = self.previous;
+        try self.consume(tokens.TokenType.LeftParen, forToken, diagnostic, "Expect opening parentheses after");
+        const leftParenToken = self.previous;
+
+        // init
+        if (self.match(tokens.TokenType.Var)) {
+            try self.varStatement(alloc, diagnostic);
+        } else if (self.current.kind != tokens.TokenType.Semicolon) {
+            try self.expressionStatement(alloc, diagnostic);
+        } else {
+            try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon after");
+        } // This makes the init-section stack-effect free
+
+        // condition
+        // If no condition, this will point to the start of block! no need for something like a trueOp
+        var conditionStart: ?usize = null;
+        if (self.current.kind != tokens.TokenType.Semicolon) {
+            conditionStart = self.output.byteCodeList.items.len;
+            try self.expression(alloc, diagnostic);
+        }
+        const jumpToEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpIfFalseOp));
+        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon after");
+        const conditionEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpOp));
+
+        // updater
+        const incrementStart = self.output.byteCodeList.items.len;
+        if (self.current.kind != tokens.TokenType.RightParen) {
+            try self.expression(alloc, diagnostic);
+        }
+        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        const incrementEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.LoopOp));
+
+        if (conditionStart) |c| {
+            try self.patchJump(incrementEnd, c);
+        } else {
+            try self.patchJump(incrementEnd, conditionEnd - 1);
+        }
+
+        try self.consume(tokens.TokenType.RightParen, leftParenToken, diagnostic, "Expect closing parentheses for");
+
+        try self.patchJump(conditionEnd, self.output.byteCodeList.items.len);
+
+        try self.statement(alloc, diagnostic);
+
+        const blockEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.LoopOp));
+        try self.patchJump(blockEnd, incrementStart);
+
+        try self.patchJump(jumpToEnd, self.output.byteCodeList.items.len);
+        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+
+        try self.endScope(alloc);
     }
 
     fn blockStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
