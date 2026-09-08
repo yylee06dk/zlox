@@ -462,12 +462,13 @@ pub const Compiler = struct {
         // condition
         // If no condition, this will point to the start of block! no need for something like a trueOp
         var conditionStart: ?usize = null;
+        var jumpToEnd: ?usize = null;
         if (self.current.kind != tokens.TokenType.Semicolon) {
             conditionStart = self.output.byteCodeList.items.len;
             try self.expression(alloc, diagnostic);
+            jumpToEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpIfFalseOp));
+            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
         }
-        const jumpToEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpIfFalseOp));
-        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
         try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon after");
         const conditionEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpOp));
 
@@ -475,8 +476,8 @@ pub const Compiler = struct {
         const incrementStart = self.output.byteCodeList.items.len;
         if (self.current.kind != tokens.TokenType.RightParen) {
             try self.expression(alloc, diagnostic);
+            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
         }
-        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
         const incrementEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.LoopOp));
 
         if (conditionStart) |c| {
@@ -494,8 +495,10 @@ pub const Compiler = struct {
         const blockEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.LoopOp));
         try self.patchJump(blockEnd, incrementStart);
 
-        try self.patchJump(jumpToEnd, self.output.byteCodeList.items.len);
-        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        if (jumpToEnd) |j| {
+            try self.patchJump(j, self.output.byteCodeList.items.len);
+            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        }
 
         try self.endScope(alloc);
     }
