@@ -13,7 +13,7 @@ pub const Value = union(valueType) {
     number: f64,
     boolean: bool,
     nil: u1,
-    obj: *objects.Object,
+    obj: objects.Object,
 
     pub fn isNum(self: Value) bool {
         return switch (self) {
@@ -51,7 +51,7 @@ pub const Value = union(valueType) {
         return self.boolean;
     }
 
-    pub fn asObj(self: Value) *objects.Object {
+    pub fn asObj(self: Value) objects.Object {
         return self.obj;
     }
 
@@ -70,9 +70,11 @@ pub const Value = union(valueType) {
             .boolean => try writer.print("{}]", .{self.boolean}),
             .number => try writer.print("{}]", .{self.number}),
             .nil => try writer.print("<nil>]", .{}),
-            .obj => {
-                const objStr: *strings.ObjectString = @ptrCast(@alignCast(self.obj));
-                try writer.print("<obj:{}, {s}>]", .{ self.obj.kind, objStr.getString() });
+            .obj => |o| {
+                switch (o) {
+                    .String => |s| try writer.print("<obj:String, {s}>]", .{s.getString()}),
+                    .Function => |f| try writer.print("<obj:Function, {s}>]", .{f.getName()}),
+                }
             },
         }
     }

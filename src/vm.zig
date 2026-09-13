@@ -6,20 +6,26 @@ const values = @import("values.zig");
 const memory = @import("memory.zig");
 const objects = @import("objects.zig");
 const strings = @import("strings.zig");
+const functions = @import("functions.zig");
 const table = @import("table.zig");
 
 const print = std.debug.print;
 const t = std.debug.print;
 const Allocator = std.mem.Allocator;
+const maxFrameCount = 64;
 
 pub const VM = struct {
-    chunk: *const bcInfo.Chunk = undefined, // Borrowed
-    ip: usize = 0,
+    frames: []CallFrame,
+    frameCount: usize,
     debugFlag: bool = false,
     stack: vmStack.Stack,
     stringPool: table.Table,
     globals: table.Table,
     gcAlloc: memory.GCAllocator = .{},
+
+    fn getCurrentFrame(self: *const VM) *CallFrame {
+        return &self.frames[self.frameCount - 1];
+    }
 
     pub const Error = error{
         CompileError,
@@ -36,11 +42,12 @@ pub const VM = struct {
         }
 
         pub fn report(self: *Diagnostic) void {
-            print("zlox: RuntimeError: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.ip - 1, self.message });
+            print("zlox: RuntimeError: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.getCurrentFrame().ip - 1, self.message });
         }
 
         fn getLine(self: *const Diagnostic) usize {
-            return self.vmSnapShot.chunk.lineSlice[self.vmSnapShot.ip - 1];
+            const ip = self.vmSnapShot.getCurrentFrame().ip;
+            return self.vmSnapShot.getCurrentFrame().function.chunk.lineSlice[ip];
         }
     };
 
@@ -58,8 +65,16 @@ pub const VM = struct {
         }
     };
 
+    const CallFrame = struct {
+        function: *const functions.ObjectFunction,
+        ip: usize,
+        basePtr: usize,
+    };
+
     pub fn initSettings(debugFlag: bool, alloc: Allocator) Allocator.Error!VM {
         return .{
+            .frames = try alloc.alloc(CallFrame, maxFrameCount),
+            .frameCount = 0,
             .debugFlag = debugFlag,
             .stack = try vmStack.Stack.init(alloc),
             .stringPool = try table.Table.init(alloc),
@@ -75,16 +90,21 @@ pub const VM = struct {
         self.globals.deinit(alloc);
     }
 
-    pub fn setChunk(self: *VM, chunk: *const bcInfo.Chunk) void {
-        self.chunk = chunk;
-        // For the repl session, ip and stack needs to be reset
-        self.ip = 0;
+    pub fn setTargetFunction(self: *VM, targetFunc: *functions.ObjectFunction) !void {
+        // For the repl session, stack needs to be reset
         self.stack.clear();
+
+        const basePtr = self.stack.length;
+        try self.stack.push(.{ .obj = .{ .Function = targetFunc } }); // like calling the script/main function
+        // No parameters! no need to do additional pushing stuffs
+
+        self.frames[self.frameCount] = .{ .function = targetFunc, .ip = 0, .basePtr = basePtr };
+        self.frameCount += 1;
     }
 
     pub fn execute(self: *VM, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
         if (self.debugFlag) {
-            try writer.print("==== VM Execute Trace ====\n", .{});
+            try writer.print("==== VM Execute Trace: {s} ====\n", .{self.getCurrentFrame().function.getName()});
         }
         while (!self.isAtEnd()) {
             const curCode = self.advance();
@@ -92,15 +112,15 @@ pub const VM = struct {
             switch (opCode) {
                 .ReturnOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | returned, peek: {?}\n", .{ self.ip - 1, self.stack.peek(0) });
+                        try writer.print("+{d:0>4} | returned, peek: {?}\n", .{ self.getCurrentFrame().ip - 1, self.stack.peek(0) });
                     }
                 },
                 .ConstantOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | constant: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | constant: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const valueAddr = self.advance();
-                    const value = self.chunk.constantSlice[valueAddr];
+                    const value = self.getCurrentFrame().function.chunk.constantSlice[valueAddr];
                     try self.stack.push(value);
                     if (self.debugFlag) {
                         try writer.print("{}\n", .{value});
@@ -108,7 +128,7 @@ pub const VM = struct {
                 },
                 .NegateOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | negate: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | negate: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const value = self.stack.pop();
                     if (value) |v| {
@@ -131,7 +151,7 @@ pub const VM = struct {
                 },
                 .PrintOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | print: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | print: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const value = if (self.stack.pop()) |v| v else {
                         diagnostics.setContext(self, "Expected value in stack");
@@ -141,20 +161,24 @@ pub const VM = struct {
                 },
                 .NilOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | nilOp \n", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | nilOp \n", .{self.getCurrentFrame().ip - 1});
                     }
                     try self.stack.push(values.Value{ .nil = 1 });
                 },
                 .DefineGlobalOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | defGlobal: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | defGlobal: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const value = if (self.stack.pop()) |v| v else {
                         diagnostics.setContext(self, "Expected value in stack");
                         return Error.CompileError;
                     };
-                    const targetConstant = self.chunk.constantSlice[self.advance()];
-                    const defineTarget: *strings.ObjectString = if (targetConstant.isObj()) @ptrCast(@alignCast(targetConstant.asObj())) else {
+                    const targetConstant = self.getCurrentFrame().function.chunk.constantSlice[self.advance()];
+                    const targetConstantObj = if (targetConstant.isObj()) targetConstant.asObj() else {
+                        diagnostics.setContext(self, "Unassignable target");
+                        return Error.CompileError;
+                    };
+                    const defineTarget: *strings.ObjectString = if (std.meta.activeTag(targetConstantObj) == .String) targetConstantObj.String else {
                         diagnostics.setContext(self, "Unassignable target");
                         return Error.CompileError;
                     };
@@ -166,15 +190,15 @@ pub const VM = struct {
                 },
                 .GetGlobalOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | getGlobal: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | getGlobal: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const valueAddr = self.advance();
-                    const nameVal = self.chunk.constantSlice[valueAddr];
+                    const nameVal = self.getCurrentFrame().function.chunk.constantSlice[valueAddr];
                     const nameObjStr = nameBlock: {
                         if (!nameVal.isObj()) break :nameBlock null;
                         const valueObj = nameVal.asObj();
                         if (!valueObj.isString()) break :nameBlock null;
-                        break :nameBlock @as(*strings.ObjectString, @ptrCast(@alignCast(valueObj)));
+                        break :nameBlock valueObj.String;
                     } orelse {
                         diagnostics.setContext(self, "Unaccessible variable <should show what was tried to be accessed>");
                         return Error.CompileError;
@@ -190,15 +214,15 @@ pub const VM = struct {
                 },
                 .SetGlobalOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | setGlobal: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | setGlobal: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const valueAddr = self.advance();
-                    const nameVal = self.chunk.constantSlice[valueAddr];
+                    const nameVal = self.getCurrentFrame().function.chunk.constantSlice[valueAddr];
                     const nameObjStr = nameBlock: {
                         if (!nameVal.isObj()) break :nameBlock null;
                         const valueObj = nameVal.asObj();
                         if (!valueObj.isString()) break :nameBlock null;
-                        break :nameBlock @as(*strings.ObjectString, @ptrCast(@alignCast(valueObj)));
+                        break :nameBlock valueObj.String;
                     } orelse {
                         diagnostics.setContext(self, "Unaccessible variable <should show what was tried to be accessed>");
                         return Error.RuntimeError;
@@ -219,21 +243,22 @@ pub const VM = struct {
                 },
                 .DefineLocalOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | defLocal: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | defLocal: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const slot = self.advance();
                     if (slot >= self.stack.length) {
                         diagnostics.setContext(self, "local variable not found in define stage, should be resolved in compile stage");
                         return Error.CompileError;
                     }
-                    const value = self.stack.stackArray[slot];
+                    const trueAddr = self.getCurrentFrame().basePtr + self.getCurrentFrame().function.arity + slot;
+                    const value = self.stack.stackArray[trueAddr];
                     if (self.debugFlag) {
                         try writer.print("{d:>3}: {f}\n", .{ slot, value });
                     }
                 },
                 .GetLocalOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | getLocal: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | getLocal: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const slot = self.advance();
                     if (slot >= self.stack.length) {
@@ -241,7 +266,8 @@ pub const VM = struct {
                         return Error.CompileError;
                     }
 
-                    const value = self.stack.stackArray[slot];
+                    const trueAddr = self.getCurrentFrame().basePtr + self.getCurrentFrame().function.arity + slot;
+                    const value = self.stack.stackArray[trueAddr];
                     try self.stack.push(value);
                     if (self.debugFlag) {
                         try writer.print("{d:>3}: {f}\n", .{ slot, value });
@@ -249,7 +275,7 @@ pub const VM = struct {
                 },
                 .SetLocalOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | setLocal: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | setLocal: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const slot = self.advance();
                     if (slot >= self.stack.length) {
@@ -257,6 +283,7 @@ pub const VM = struct {
                         return Error.CompileError;
                     }
 
+                    const trueAddr = self.getCurrentFrame().basePtr + self.getCurrentFrame().function.arity + slot;
                     const newVal = if (self.stack.peek(0)) |v| v else {
                         diagnostics.setContext(self, "Expected value in stack");
                         return Error.CompileError;
@@ -264,12 +291,12 @@ pub const VM = struct {
                     if (self.debugFlag) {
                         try writer.print("slot:{d:>3} : {f} -> {f}\n", .{ slot, self.stack.stackArray[slot], newVal });
                     }
-                    self.stack.stackArray[slot] = newVal;
+                    self.stack.stackArray[trueAddr] = newVal;
                 },
 
                 .JumpIfFalseOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | jumpIfFalse: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | jumpIfFalse: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const short = self.advanceShort();
                     const condition = if (self.stack.peek(0)) |v| v else {
@@ -281,7 +308,7 @@ pub const VM = struct {
                         return Error.RuntimeError;
                     };
                     if (!conditionBool) {
-                        self.ip += short;
+                        self.getCurrentFrame().ip += short;
                     }
                     const trueJump = if (!conditionBool) short else 0;
                     if (self.debugFlag) {
@@ -290,27 +317,27 @@ pub const VM = struct {
                 },
                 .JumpOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | jump: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | jump: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const short = self.advanceShort();
-                    self.ip += short;
+                    self.getCurrentFrame().ip += short;
                     if (self.debugFlag) {
                         try writer.print("jumped {d:>4}\n", .{short});
                     }
                 },
                 .LoopOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | loop: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | loop: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const short = self.advanceShort();
-                    self.ip -= short;
+                    self.getCurrentFrame().ip -= short;
                     if (self.debugFlag) {
                         try writer.print("jumped -{d:>4}\n", .{short});
                     }
                 },
                 .PopOp => {
                     if (self.debugFlag) {
-                        try writer.print("{d:0>4} | popOp: ", .{self.ip - 1});
+                        try writer.print("+{d:0>4} | popOp: ", .{self.getCurrentFrame().ip - 1});
                     }
                     if (self.stack.pop()) |v| {
                         if (self.debugFlag) try writer.print("{f}\n", .{v});
@@ -326,6 +353,8 @@ pub const VM = struct {
         if (self.debugFlag) {
             try writer.print("==== VM Execute Trace ====\n", .{});
         }
+        std.debug.assert(self.frameCount != 0);
+        self.frameCount -= 1;
     }
 
     fn doBinaryOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
@@ -337,7 +366,7 @@ pub const VM = struct {
             else => unreachable,
         };
         if (self.debugFlag) {
-            try writer.print("{d:0>4} | {s}: ", .{ self.ip - 1, operatorName });
+            try writer.print("+{d:0>4} | {s}: ", .{ self.getCurrentFrame().ip - 1, operatorName });
         }
 
         const operandsNum = try self.unboxOperands(OperandType.number);
@@ -367,11 +396,11 @@ pub const VM = struct {
 
             const concatString = try std.mem.concat(alloc, u8, &.{ o.lVal, o.rVal });
             defer alloc.free(concatString);
-            const ptr = try strings.makeString(concatString, concatString.len, &self.gcAlloc, &self.stringPool, alloc);
+            const strPtr = try strings.makeString(concatString, concatString.len, &self.gcAlloc, &self.stringPool, alloc);
             if (self.debugFlag) {
-                try writer.print("{s}\n", .{ptr.getString()});
+                try writer.print("{s}\n", .{strPtr.getString()});
             }
-            try self.stack.push(values.Value{ .obj = @ptrCast(ptr) });
+            try self.stack.push(values.Value{ .obj = .{ .String = strPtr } });
             return;
         }
 
@@ -404,11 +433,11 @@ pub const VM = struct {
             .string => {
                 const isStrLeft = result: {
                     const lObj = if (lPeek.isObj()) lPeek.asObj() else break :result false;
-                    break :result lObj.kind == objects.ObjectType.String;
+                    break :result std.meta.activeTag(lObj) == .String;
                 };
                 const isStrRight = result: {
                     const rObj = if (rPeek.isObj()) rPeek.asObj() else break :result false;
-                    break :result rObj.kind == objects.ObjectType.String;
+                    break :result std.meta.activeTag(rObj) == .String;
                 };
 
                 if (isStrLeft and isStrRight) {
@@ -435,17 +464,17 @@ pub const VM = struct {
     fn isAtEnd(
         self: *const VM,
     ) bool {
-        return (self.ip >= self.chunk.codeSlice.len);
+        return (self.getCurrentFrame().ip >= self.getCurrentFrame().function.chunk.codeSlice.len);
     }
 
     fn advance(self: *VM) u8 {
-        self.ip += 1;
-        return self.chunk.codeSlice[self.ip - 1];
+        self.getCurrentFrame().ip += 1;
+        return self.getCurrentFrame().function.chunk.codeSlice[self.getCurrentFrame().ip - 1];
     }
     fn advanceShort(self: *VM) u16 {
-        self.ip += 2;
-        const upperU8 = @as(u16, self.chunk.codeSlice[self.ip - 2]);
-        const lowerU8 = @as(u16, self.chunk.codeSlice[self.ip - 1]);
+        self.getCurrentFrame().ip += 2;
+        const upperU8 = @as(u16, self.getCurrentFrame().function.chunk.codeSlice[self.getCurrentFrame().ip - 2]);
+        const lowerU8 = @as(u16, self.getCurrentFrame().function.chunk.codeSlice[self.getCurrentFrame().ip - 1]);
         const offset: u16 = upperU8 << 8 | lowerU8;
         return offset;
     }

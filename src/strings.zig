@@ -6,7 +6,6 @@ const table = @import("table.zig");
 const Allocator = std.mem.Allocator;
 
 pub const ObjectString = struct {
-    object: objects.Object,
     length: u32,
     hash: u32,
     // Characters trail (raw bytes of info)
@@ -19,20 +18,20 @@ pub const ObjectString = struct {
 fn allocateString(totalLength: usize, string: []const u8, hash: u32, gcAlloc: *memory.GCAllocator, stringPool: *table.Table, alloc: Allocator) Allocator.Error!*ObjectString {
     const allocation = try alloc.alignedAlloc(u8, .of(ObjectString), totalLength);
     errdefer alloc.free(allocation);
-    const ptr: *ObjectString = @ptrCast(allocation);
-    try gcAlloc.addAllocation(@ptrCast(ptr), totalLength, alloc);
+    const strPtr: *ObjectString = @ptrCast(allocation);
+    const strObj = objects.Object{ .String = strPtr };
+    try gcAlloc.addAllocation(strObj, totalLength, alloc);
 
-    ptr.* = ObjectString{
-        .object = .{ .kind = .String },
+    strPtr.* = ObjectString{
         .length = @intCast(totalLength - @sizeOf(ObjectString)),
         .hash = hash,
     };
 
     @memcpy(allocation[@sizeOf(ObjectString)..], string);
 
-    _ = try stringPool.set(ptr, .{ .nil = 1 }, alloc);
+    _ = try stringPool.set(strPtr, .{ .nil = 1 }, alloc);
 
-    return @ptrCast(ptr);
+    return @ptrCast(strPtr);
 }
 
 pub fn makeString(start: []const u8, length: usize, gcAlloc: *memory.GCAllocator, stringPool: *table.Table, alloc: Allocator) Allocator.Error!*ObjectString {

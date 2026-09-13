@@ -128,23 +128,23 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
 
     // Compiler setup
     var compileDiagnostic = compile.Compiler.Diagnostic{};
-    var compiler = try compile.Compiler.init(source, tokenList, machine, init.gpa);
+    var compiler = try compile.Compiler.init(source, tokenList, machine, compile.Compiler.CompileType.Script, 0, null, init.gpa);
     defer compiler.deinit(init.gpa);
-    var chunk = compiler.compileOwnedChunk(init.gpa, &compileDiagnostic) catch |err| switch (err) {
+    var scriptPtr = compiler.compileOwnedFunctionObj(init.gpa, &compileDiagnostic) catch |err| switch (err) {
         error.ParseFailed => {
             compileDiagnostic.report(source);
             return;
         },
         else => return err, // Fatal errors can just be propagated
     } orelse return; // Nothing to compile.
-    defer chunk.deinit(init.gpa);
+    // Memory controlled by GC
     if (DebugMode or DebugChunk) {
-        try chunk.printChunk("debugging :)", writer);
+        try scriptPtr.chunk.printChunk("debugging :)", writer);
     }
 
     // VM setup
     var vmDiagnostic = vm.VM.Diagnostic{};
-    machine.setChunk(&chunk);
+    try machine.setTargetFunction(scriptPtr);
     machine.execute(writer, init.gpa, &vmDiagnostic) catch |err| switch (err) {
         error.RuntimeError, error.CompileError => {
             vmDiagnostic.report();
