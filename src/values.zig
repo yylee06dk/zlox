@@ -1,19 +1,20 @@
 const std = @import("std");
 const objects = @import("objects.zig");
-const strings = @import("strings.zig");
 
 pub const valueType = enum {
     number,
     boolean,
     nil,
-    obj,
+    string,
+    function,
 };
 
 pub const Value = union(valueType) {
     number: f64,
     boolean: bool,
     nil: u1,
-    obj: objects.Object,
+    string: *objects.Object.String,
+    function: *objects.Object.Function,
 
     pub fn isNum(self: Value) bool {
         return switch (self) {
@@ -38,7 +39,21 @@ pub const Value = union(valueType) {
 
     pub fn isObj(self: Value) bool {
         return switch (self) {
-            .obj => true,
+            .string, .function => true,
+            else => false,
+        };
+    }
+
+    pub fn isString(self: Value) bool {
+        return switch (self) {
+            .string => true,
+            else => false,
+        };
+    }
+
+    pub fn isFunction(self: Value) bool {
+        return switch (self) {
+            .function => true,
             else => false,
         };
     }
@@ -51,8 +66,18 @@ pub const Value = union(valueType) {
         return self.boolean;
     }
 
-    pub fn asObj(self: Value) objects.Object {
-        return self.obj;
+    pub fn asString(self: Value) ?*objects.Object.String {
+        return switch (self) {
+            .string => |string| string,
+            else => null,
+        };
+    }
+
+    pub fn asFunction(self: Value) ?*objects.Object.Function {
+        return switch (self) {
+            .function => |function| function,
+            else => null,
+        };
     }
 
     fn typeToString(self: Value) []const u8 {
@@ -60,22 +85,18 @@ pub const Value = union(valueType) {
             .boolean => "boolean",
             .number => "number",
             .nil => "nil",
-            .obj => "object",
+            .string, .function => "object",
         };
     }
 
     pub fn format(self: Value, writer: *std.Io.Writer) !void {
         try writer.print("[type: {s}, value: ", .{self.typeToString()});
         switch (self) {
-            .boolean => try writer.print("{}]", .{self.boolean}),
-            .number => try writer.print("{}]", .{self.number}),
+            .boolean => |b| try writer.print("{}]", .{b}),
+            .number => |n| try writer.print("{}]", .{n}),
             .nil => try writer.print("<nil>]", .{}),
-            .obj => |o| {
-                switch (o) {
-                    .String => |s| try writer.print("<obj:String, {s}>]", .{s.getString()}),
-                    .Function => |f| try writer.print("<obj:Function, {s}>]", .{f.getName()}),
-                }
-            },
+            .string => |string| try writer.print("{s}]", .{string.getString()}),
+            .function => |function| try writer.print("{s}]", .{function.getName()}),
         }
     }
 };

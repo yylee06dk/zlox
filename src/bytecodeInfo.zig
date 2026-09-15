@@ -1,13 +1,13 @@
 const std = @import("std");
 const bc = @import("bytecode.zig");
 const values = @import("values.zig");
+
 const Code = std.ArrayList(u8);
 const Line = std.ArrayList(usize);
 const Values = std.ArrayList(values.Value);
-const print = std.debug.print;
 const Allocator = std.mem.Allocator;
 
-const t = std.debug.print;
+const print = std.debug.print;
 
 pub const Chunk = struct {
     codeSlice: []u8,
@@ -101,12 +101,6 @@ pub const ByteCodeInfo = struct {
     pub fn writeCode(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: usize) Allocator.Error!void {
         try self.byteCodeList.append(alloc, code);
         try self.lineList.append(alloc, line);
-    }
-
-    pub fn writeCodeAndRemeber(self: *ByteCodeInfo, alloc: Allocator, code: u8, line: usize) Allocator.Error!usize {
-        try self.byteCodeList.append(alloc, code);
-        try self.lineList.append(alloc, line);
-        return self.byteCodeList.len - 1;
     }
 
     pub fn addConstant(self: *ByteCodeInfo, alloc: Allocator, item: values.Value) Allocator.Error!usize {

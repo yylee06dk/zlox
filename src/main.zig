@@ -9,7 +9,7 @@ const compile = @import("compiler.zig");
 const Allocator = std.mem.Allocator;
 const print = std.debug.print;
 
-const DebugMode = true;
+const DebugMode = false;
 const DebugVM = DebugMode and true;
 const DebugChunk = DebugMode and true;
 const DebugGC = DebugMode and true;

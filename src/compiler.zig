@@ -3,8 +3,8 @@ const tokens = @import("tokens.zig");
 const bc = @import("bytecode.zig");
 const bcInfo = @import("bytecodeInfo.zig");
 const values = @import("values.zig");
-const strings = @import("strings.zig");
-const functions = @import("functions.zig");
+const objects = @import("objects.zig");
+const objectStore = @import("objectStore.zig");
 const memory = @import("memory.zig");
 const vm = @import("vm.zig");
 
@@ -67,7 +67,7 @@ pub const Compiler = struct {
     targetVM: *vm.VM, // We write info needed at runtime that's resolved at compile time
     compileType: CompileType,
     arity: u8,
-    name: ?*const strings.ObjectString, //borrowed
+    name: ?*const objects.Object.String, //borrowed
 
     const Error = error{
         ParseFailed,
@@ -93,7 +93,7 @@ pub const Compiler = struct {
         }
     };
 
-    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, compileType: CompileType, arity: u8, name: ?*const strings.ObjectString, alloc: Allocator) !Compiler {
+    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, compileType: CompileType, arity: u8, name: ?*const objects.Object.String, alloc: Allocator) !Compiler {
         var temp: Compiler = .{
             .source = source,
             .tokenList = tokenList,
@@ -107,7 +107,7 @@ pub const Compiler = struct {
             .name = name,
         };
         // Reserve first slot of (call frame's) stack with function/method name
-        const funcName = if (name) |n| n else try strings.makeString("", 0, &targetVM.gcAlloc, &targetVM.stringPool, alloc);
+        const funcName = if (name) |n| n else try objectStore.makeString("", 0, &targetVM.gcAlloc, &targetVM.stringPool, alloc);
         temp.resolver.locals[0] = .{ .depth = 0, .name = funcName };
         temp.resolver.localCount += 1;
         return temp;
@@ -117,7 +117,7 @@ pub const Compiler = struct {
         self.resolver.deinit(alloc);
     }
 
-    pub fn compileOwnedFunctionObj(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !?*functions.ObjectFunction {
+    pub fn compileOwnedFunctionObj(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !?*objects.Object.Function {
         // errdefer self.output.deinit(alloc);
         // This is double checked since scanner might ignore values
         // This means the input line was not empty so we scanned it, but then it came out empty since it only had errorful contents
@@ -129,9 +129,9 @@ pub const Compiler = struct {
             return Error.ParseFailed;
         }
         // The ownership goes to the caller
-        var funcPtr = try functions.ObjectFunction.createEmpty(alloc, &self.targetVM.gcAlloc);
+        const funcPtr = try objectStore.createEmptyFunction(alloc, &self.targetVM.gcAlloc);
         const chunk = try self.output.toOwnedChunk(alloc);
-        try funcPtr.initInplace(alloc, &self.targetVM.gcAlloc, self.name, chunk, self.arity);
+        try objectStore.initFunctionInplace(funcPtr, alloc, &self.targetVM.gcAlloc, self.name, chunk, self.arity);
         return funcPtr;
     }
 
@@ -141,7 +141,7 @@ pub const Compiler = struct {
         locals: []Local, // of length 256 (MAX_U8)
 
         const Local = struct {
-            name: *const strings.ObjectString,
+            name: *const objects.Object.String,
             depth: usize,
         };
 
@@ -181,7 +181,7 @@ pub const Compiler = struct {
         self.resolver.scopeDepth -= 1;
     }
 
-    pub fn declareVariable(self: *Compiler, name: *strings.ObjectString, diagnostic: *Diagnostic) !void {
+    pub fn declareVariable(self: *Compiler, name: *objects.Object.String, diagnostic: *Diagnostic) !void {
         if (self.resolver.localCount == std.math.maxInt(u8) + 1) {
             diagnostic.setContext(self.previous, "Too many local variables declared(max of 256) at");
             return Error.ParseFailed;
@@ -205,7 +205,7 @@ pub const Compiler = struct {
         self.resolver.localCount += 1;
     }
 
-    fn resolveLocal(self: *Compiler, name: *strings.ObjectString) ?usize {
+    fn resolveLocal(self: *Compiler, name: *objects.Object.String) ?usize {
         var idx = self.resolver.localCount;
         // Search for the given name in locals list
         while (idx > 0) { // start from end to meet the innermost declaration(shadowing)
@@ -272,109 +272,6 @@ pub const Compiler = struct {
     }
     // The basic blocks of the compiling process. It's like a uniform layer for compiling
 
-    // Abstracting out basic -atom-like- steps
-    fn advance(self: *Compiler) void {
-        // t("1cur{}\n", .{self.current.kind});
-        // t("1prev{}\n", .{self.previous.kind});
-        // defer t("2cur{}\n", .{self.current.kind});
-        // defer t("2prev{}\n", .{self.previous.kind});
-        if (self.previous == self.current and self.current == &(self.tokenList[0])) {
-            self.current = @ptrFromInt(@intFromPtr(self.current) + @sizeOf(tokens.Token));
-            return;
-        }
-        self.previous = @ptrFromInt(@intFromPtr(self.previous) + @sizeOf(tokens.Token));
-        self.current = @ptrFromInt(@intFromPtr(self.current) + @sizeOf(tokens.Token));
-        return;
-    }
-
-    fn isAtEnd(self: *Compiler) bool {
-        return self.current.kind == tokens.TokenType.EOF;
-    }
-
-    fn consume(self: *Compiler, expect: tokens.TokenType, owner: *tokens.Token, diagnostics: *Diagnostic, message: []const u8) !void {
-        if (self.isAtEnd() or self.current.kind != expect) {
-            diagnostics.setContext(owner, message);
-            return Error.ParseFailed;
-        }
-        self.advance();
-        return;
-    }
-
-    fn match(self: *Compiler, expect: tokens.TokenType) bool {
-        if (self.current.kind == expect) {
-            self.advance();
-            return true;
-        }
-        return false;
-    }
-    // Basic functions end
-
-    // this currently has too niche of an usage
-    fn writeConstant(self: *Compiler, alloc: Allocator, value: values.Value) Allocator.Error!void {
-        // Only causes Oom error
-        const addr = try self.output.addConstant(alloc, value);
-        if (addr > std.math.maxInt(u8)) {
-            unreachable; // Temporary fix
-        }
-
-        try self.output.writeCode(
-            alloc,
-            @intFromEnum(bc.opCode.ConstantOp),
-            self.previous.line,
-        );
-        try self.output.writeCode(
-            alloc,
-            @intCast(addr),
-            self.previous.line,
-        );
-    }
-
-    fn writeBytes(self: *Compiler, alloc: Allocator, fstByte: u8, scdByte: u8) !void {
-        try self.output.writeCode(
-            alloc,
-            fstByte,
-            self.previous.line,
-        );
-        try self.output.writeCode(
-            alloc,
-            scdByte,
-            self.previous.line,
-        );
-    }
-
-    fn markJump(self: *Compiler, alloc: Allocator, jmpType: u8) !usize {
-        try self.output.writeCode(alloc, jmpType, self.previous.line);
-        try self.writeBytes(alloc, 0, 0);
-        const jmpValPos = self.output.byteCodeList.items.len - 2;
-        return jmpValPos;
-    }
-
-    fn patchJump(self: *Compiler, patchPos: usize, targetPos: usize) !void {
-        // Due to the short read during running the VM offset has a size of 2 diff for true jumping offset
-        const jumpVal = if (targetPos < patchPos) patchPos - targetPos + 2 else targetPos - patchPos - 2;
-        if (jumpVal > @as(usize, std.math.maxInt(u16))) {
-            return Error.ParseFailed;
-        }
-        const upperU8: u8 = @intCast(jumpVal >> 8 & 0b11111111);
-        const lowerU8: u8 = @intCast(jumpVal & 0b11111111);
-        self.output.byteCodeList.items[patchPos] = upperU8;
-        self.output.byteCodeList.items[patchPos + 1] = lowerU8;
-    }
-
-    // Variable parsing related functions
-    fn parseVariable(self: *Compiler, alloc: Allocator, diagnostics: *Diagnostic) !usize {
-        try self.consume(tokens.TokenType.Identifier, self.current, diagnostics, "Expected variable name at");
-        const strPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value: values.Value = .{ .obj = @ptrCast(strPtr) };
-        return try self.output.addConstant(alloc, value);
-    }
-
-    fn namedVariable(self: *Compiler, nameToken: *tokens.Token, alloc: Allocator) !usize {
-        const ptrStr = try strings.makeString(nameToken.getLexeme(self.source), nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value = values.Value{ .obj = @ptrCast(@alignCast(ptrStr)) };
-        return try self.output.addConstant(alloc, value);
-    }
-
     // ------------ Statement Parsing functions -------------
     fn printStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
         const printToken = self.previous;
@@ -389,8 +286,8 @@ pub const Compiler = struct {
 
         try self.consume(tokens.TokenType.Identifier, self.current, diagnostic, "Expected variable name at");
 
-        const strPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value: values.Value = .{ .obj = .{ .String = strPtr } };
+        const strPtr = try objectStore.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const value: values.Value = .{ .string = strPtr };
         // Add the variable name to constant list
         const addr = try self.output.addConstant(alloc, value);
         // Add the variable itself to resolver
@@ -578,10 +475,8 @@ pub const Compiler = struct {
     fn string(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Allocator.Error!void {
         _ = canAssign;
         _ = diagnostic;
-        const strPtr = try strings.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value = values.Value{
-            .obj = .{ .String = strPtr },
-        };
+        const strPtr = try objectStore.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const value: values.Value = .{ .string = strPtr };
         try self.writeConstant(alloc, value);
     }
 
@@ -589,8 +484,8 @@ pub const Compiler = struct {
         const isLocal = self.resolver.scopeDepth > 0;
 
         const nameToken = self.previous;
-        const strPtr = try strings.makeString(nameToken.getLexeme(self.source), nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value = values.Value{ .obj = .{ .String = strPtr } };
+        const strPtr = try objectStore.makeString(nameToken.getLexeme(self.source), nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const value: values.Value = .{ .string = strPtr };
         const addr = try self.output.addConstant(alloc, value);
         const slot = self.resolveLocal(strPtr);
         const resolved = slot != null;
@@ -634,5 +529,108 @@ pub const Compiler = struct {
             .Slash => try self.output.writeCode(alloc, @intFromEnum(bc.opCode.DivOp), self.previous.line),
             else => unreachable,
         }
+    }
+
+    // Abstracting out basic -atom-like- steps
+    fn advance(self: *Compiler) void {
+        // t("1cur{}\n", .{self.current.kind});
+        // t("1prev{}\n", .{self.previous.kind});
+        // defer t("2cur{}\n", .{self.current.kind});
+        // defer t("2prev{}\n", .{self.previous.kind});
+        if (self.previous == self.current and self.current == &(self.tokenList[0])) {
+            self.current = @ptrFromInt(@intFromPtr(self.current) + @sizeOf(tokens.Token));
+            return;
+        }
+        self.previous = @ptrFromInt(@intFromPtr(self.previous) + @sizeOf(tokens.Token));
+        self.current = @ptrFromInt(@intFromPtr(self.current) + @sizeOf(tokens.Token));
+        return;
+    }
+
+    fn isAtEnd(self: *Compiler) bool {
+        return self.current.kind == tokens.TokenType.EOF;
+    }
+
+    fn consume(self: *Compiler, expect: tokens.TokenType, owner: *tokens.Token, diagnostics: *Diagnostic, message: []const u8) !void {
+        if (self.isAtEnd() or self.current.kind != expect) {
+            diagnostics.setContext(owner, message);
+            return Error.ParseFailed;
+        }
+        self.advance();
+        return;
+    }
+
+    fn match(self: *Compiler, expect: tokens.TokenType) bool {
+        if (self.current.kind == expect) {
+            self.advance();
+            return true;
+        }
+        return false;
+    }
+    // Basic functions end
+
+    // this currently has too niche of an usage
+    fn writeConstant(self: *Compiler, alloc: Allocator, value: values.Value) Allocator.Error!void {
+        // Only causes Oom error
+        const addr = try self.output.addConstant(alloc, value);
+        if (addr > std.math.maxInt(u8)) {
+            unreachable; // Temporary fix
+        }
+
+        try self.output.writeCode(
+            alloc,
+            @intFromEnum(bc.opCode.ConstantOp),
+            self.previous.line,
+        );
+        try self.output.writeCode(
+            alloc,
+            @intCast(addr),
+            self.previous.line,
+        );
+    }
+
+    fn writeBytes(self: *Compiler, alloc: Allocator, fstByte: u8, scdByte: u8) !void {
+        try self.output.writeCode(
+            alloc,
+            fstByte,
+            self.previous.line,
+        );
+        try self.output.writeCode(
+            alloc,
+            scdByte,
+            self.previous.line,
+        );
+    }
+
+    fn markJump(self: *Compiler, alloc: Allocator, jmpType: u8) !usize {
+        try self.output.writeCode(alloc, jmpType, self.previous.line);
+        try self.writeBytes(alloc, 0, 0);
+        const jmpValPos = self.output.byteCodeList.items.len - 2;
+        return jmpValPos;
+    }
+
+    fn patchJump(self: *Compiler, patchPos: usize, targetPos: usize) !void {
+        // Due to the short read during running the VM offset has a size of 2 diff for true jumping offset
+        const jumpVal = if (targetPos < patchPos) patchPos - targetPos + 2 else targetPos - patchPos - 2;
+        if (jumpVal > @as(usize, std.math.maxInt(u16))) {
+            return Error.ParseFailed;
+        }
+        const upperU8: u8 = @intCast(jumpVal >> 8 & 0b11111111);
+        const lowerU8: u8 = @intCast(jumpVal & 0b11111111);
+        self.output.byteCodeList.items[patchPos] = upperU8;
+        self.output.byteCodeList.items[patchPos + 1] = lowerU8;
+    }
+
+    // Variable parsing related functions
+    fn parseVariable(self: *Compiler, alloc: Allocator, diagnostics: *Diagnostic) !usize {
+        try self.consume(tokens.TokenType.Identifier, self.current, diagnostics, "Expected variable name at");
+        const strPtr = try objectStore.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const value: values.Value = .{ .string = strPtr };
+        return try self.output.addConstant(alloc, value);
+    }
+
+    fn namedVariable(self: *Compiler, nameToken: *tokens.Token, alloc: Allocator) !usize {
+        const ptrStr = try objectStore.makeString(nameToken.getLexeme(self.source), nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const value: values.Value = .{ .string = ptrStr };
+        return try self.output.addConstant(alloc, value);
     }
 };

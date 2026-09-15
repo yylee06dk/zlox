@@ -1,46 +1,62 @@
 const std = @import("std");
-const strings = @import("strings.zig");
-const functions = @import("functions.zig");
+const StringObject = @import("object/string.zig").String;
+const FunctionObject = @import("object/function.zig").Function;
 
 pub const ObjectType = enum {
-    String,
-    Function,
+    string,
+    function,
 };
 
+// This is now like a fat pointer. -- normally shouldn't see types like *Object
 pub const Object = union(ObjectType) {
-    String: *strings.ObjectString,
-    Function: *functions.ObjectFunction,
+    string: *String,
+    function: *Function,
+
+    pub const String = StringObject;
+    pub const Function = FunctionObject;
 
     pub fn isString(self: Object) bool {
         return switch (self) {
-            .String => true,
+            .string => true,
             else => false,
         };
     }
 
     pub fn isFunction(self: Object) bool {
         return switch (self) {
-            .Function => true,
+            .function => true,
             else => false,
         };
     }
 
     pub fn getPointer(self: Object) *anyopaque {
         return switch (self) {
-            .String => |s| s,
-            .Function => |f| f,
+            .string => |s| s,
+            .function => |f| f,
         };
     }
 
     pub fn getString(self: Object) []const u8 {
-        std.debug.assert(std.meta.activeTag(self) == .String);
-        const strPtr = self.String;
+        std.debug.assert(std.meta.activeTag(self) == .string);
+        const strPtr = self.string;
         return strPtr.getString();
     }
 
     pub fn getName(self: Object) []const u8 {
-        std.debug.assert(std.meta.activeTag(self) == .Function);
-        const funcPtr = self.Function;
+        std.debug.assert(std.meta.activeTag(self) == .function);
+        const funcPtr = self.function;
         return funcPtr.getName();
+    }
+
+    // --- Pretty Printing
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        switch (self) {
+            .string => |string| try writer.print("{s}", .{string.getString()}),
+            .function => |function| try writer.print("{s}", .{function.getName()}),
+        }
     }
 };

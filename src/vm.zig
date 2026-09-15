@@ -5,8 +5,7 @@ const vmStack = @import("vmStack.zig");
 const values = @import("values.zig");
 const memory = @import("memory.zig");
 const objects = @import("objects.zig");
-const strings = @import("strings.zig");
-const functions = @import("functions.zig");
+const objectStore = @import("objectStore.zig");
 const table = @import("table.zig");
 
 const print = std.debug.print;
@@ -25,6 +24,18 @@ pub const VM = struct {
 
     fn getCurrentFrame(self: *const VM) *CallFrame {
         return &self.frames[self.frameCount - 1];
+    }
+
+    fn getConst(self: *const VM, addr: usize) values.Value {
+        return self.getCurrentFrame().function.chunk.constantSlice[addr];
+    }
+
+    fn getCode(self: *const VM, addr: usize) u8 {
+        return self.getCurrentFrame().function.chunk.codeSlice[addr];
+    }
+
+    fn getLine(self: *const VM, addr: usize) usize {
+        return self.getCurrentFrame().function.chunk.lineSlice[addr];
     }
 
     pub const Error = error{
@@ -66,7 +77,7 @@ pub const VM = struct {
     };
 
     const CallFrame = struct {
-        function: *const functions.ObjectFunction,
+        function: *const objects.Object.Function,
         ip: usize,
         basePtr: usize,
     };
@@ -88,14 +99,15 @@ pub const VM = struct {
         self.stack.deinit(alloc);
         self.stringPool.deinit(alloc);
         self.globals.deinit(alloc);
+        alloc.free(self.frames);
     }
 
-    pub fn setTargetFunction(self: *VM, targetFunc: *functions.ObjectFunction) !void {
+    pub fn setTargetFunction(self: *VM, targetFunc: *objects.Object.Function) !void {
         // For the repl session, stack needs to be reset
         self.stack.clear();
 
         const basePtr = self.stack.length;
-        try self.stack.push(.{ .obj = .{ .Function = targetFunc } }); // like calling the script/main function
+        try self.stack.push(.{ .function = targetFunc }); // like calling the script/main function
         // No parameters! no need to do additional pushing stuffs
 
         self.frames[self.frameCount] = .{ .function = targetFunc, .ip = 0, .basePtr = basePtr };
@@ -120,8 +132,8 @@ pub const VM = struct {
                         try writer.print("+{d:0>4} | constant: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const valueAddr = self.advance();
-                    const value = self.getCurrentFrame().function.chunk.constantSlice[valueAddr];
-                    try self.stack.push(value);
+                    const value = self.getConst(valueAddr);
+                    try self.safePush(value, diagnostics);
                     if (self.debugFlag) {
                         try writer.print("{}\n", .{value});
                     }
@@ -130,21 +142,16 @@ pub const VM = struct {
                     if (self.debugFlag) {
                         try writer.print("+{d:0>4} | negate: ", .{self.getCurrentFrame().ip - 1});
                     }
-                    const value = self.stack.pop();
-                    if (value) |v| {
-                        if (v.isNum()) {
-                            if (self.debugFlag) {
-                                try writer.print("{d} -> {d}\n", .{ v.asNum(), -v.asNum() });
-                            }
-                            try self.stack.push(values.Value{ .number = -v.asNum() });
-                            continue;
+                    const value = try self.safePop(diagnostics);
+                    if (value.isNum()) {
+                        if (self.debugFlag) {
+                            try writer.print("{d} -> {d}\n", .{ value.asNum(), -value.asNum() });
                         }
-                        diagnostics.setContext(self, "negate operation can only have number operands");
-                        return Error.RuntimeError;
-                    } else {
-                        diagnostics.setContext(self, "Expected value in stack");
-                        return Error.CompileError;
+                        try self.safePush(values.Value{ .number = -value.asNum() }, diagnostics);
+                        continue;
                     }
+                    diagnostics.setContext(self, "negate operation can only have number operands");
+                    return Error.RuntimeError;
                 },
                 .AddOp, .SubOp, .MultOp, .DivOp => {
                     try self.doBinaryOp(opCode, writer, alloc, diagnostics);
@@ -153,53 +160,37 @@ pub const VM = struct {
                     if (self.debugFlag) {
                         try writer.print("+{d:0>4} | print: ", .{self.getCurrentFrame().ip - 1});
                     }
-                    const value = if (self.stack.pop()) |v| v else {
-                        diagnostics.setContext(self, "Expected value in stack");
-                        return Error.CompileError;
-                    };
+                    const value = try self.safePop(diagnostics);
                     try writer.print("{f}\n", .{value});
                 },
                 .NilOp => {
                     if (self.debugFlag) {
                         try writer.print("+{d:0>4} | nilOp \n", .{self.getCurrentFrame().ip - 1});
                     }
-                    try self.stack.push(values.Value{ .nil = 1 });
+                    try self.safePush(values.Value{ .nil = 1 }, diagnostics);
                 },
                 .DefineGlobalOp => {
                     if (self.debugFlag) {
                         try writer.print("+{d:0>4} | defGlobal: ", .{self.getCurrentFrame().ip - 1});
                     }
-                    const value = if (self.stack.pop()) |v| v else {
-                        diagnostics.setContext(self, "Expected value in stack");
+                    const value = try self.safePop(diagnostics);
+
+                    const defTarget = self.getConst(self.advance()).asString() orelse {
+                        diagnostics.setContext(self, "Unassignable");
                         return Error.CompileError;
                     };
-                    const targetConstant = self.getCurrentFrame().function.chunk.constantSlice[self.advance()];
-                    const targetConstantObj = if (targetConstant.isObj()) targetConstant.asObj() else {
-                        diagnostics.setContext(self, "Unassignable target");
-                        return Error.CompileError;
-                    };
-                    const defineTarget: *strings.ObjectString = if (std.meta.activeTag(targetConstantObj) == .String) targetConstantObj.String else {
-                        diagnostics.setContext(self, "Unassignable target");
-                        return Error.CompileError;
-                    };
-                    _ = try self.globals.set(defineTarget, value, alloc);
+
+                    _ = try self.globals.set(defTarget, value, alloc);
                     if (self.debugFlag) {
-                        try writer.print("{s}: {f}\n", .{ defineTarget.getString(), value });
+                        try writer.print("{s}: {f}\n", .{ defTarget.getString(), value });
                     }
-                    _ = self.stack.pop();
+                    _ = try self.safePop(diagnostics);
                 },
                 .GetGlobalOp => {
                     if (self.debugFlag) {
                         try writer.print("+{d:0>4} | getGlobal: ", .{self.getCurrentFrame().ip - 1});
                     }
-                    const valueAddr = self.advance();
-                    const nameVal = self.getCurrentFrame().function.chunk.constantSlice[valueAddr];
-                    const nameObjStr = nameBlock: {
-                        if (!nameVal.isObj()) break :nameBlock null;
-                        const valueObj = nameVal.asObj();
-                        if (!valueObj.isString()) break :nameBlock null;
-                        break :nameBlock valueObj.String;
-                    } orelse {
+                    const nameObjStr = self.getConst(self.advance()).asString() orelse {
                         diagnostics.setContext(self, "Unaccessible variable <should show what was tried to be accessed>");
                         return Error.CompileError;
                     };
@@ -216,21 +207,11 @@ pub const VM = struct {
                     if (self.debugFlag) {
                         try writer.print("+{d:0>4} | setGlobal: ", .{self.getCurrentFrame().ip - 1});
                     }
-                    const valueAddr = self.advance();
-                    const nameVal = self.getCurrentFrame().function.chunk.constantSlice[valueAddr];
-                    const nameObjStr = nameBlock: {
-                        if (!nameVal.isObj()) break :nameBlock null;
-                        const valueObj = nameVal.asObj();
-                        if (!valueObj.isString()) break :nameBlock null;
-                        break :nameBlock valueObj.String;
-                    } orelse {
+                    const nameObjStr = self.getConst(self.advance()).asString() orelse {
                         diagnostics.setContext(self, "Unaccessible variable <should show what was tried to be accessed>");
                         return Error.RuntimeError;
                     };
-                    const assignVal = if (self.stack.peek(0)) |v| v else {
-                        diagnostics.setContext(self, "Expected value in stack");
-                        return Error.CompileError;
-                    };
+                    const assignVal = try self.safePeek(diagnostics, 0);
                     const oldVal = if (self.globals.get(nameObjStr)) |v| v else {
                         diagnostics.setContext(self, "Assignment to undeclared variable");
                         return Error.RuntimeError;
@@ -241,6 +222,7 @@ pub const VM = struct {
                         try writer.print("{s}: {f} -> {f}\n", .{ nameObjStr.getString(), oldVal, assignVal });
                     }
                 },
+                // Actually not needed but for debugging purposes, it's here
                 .DefineLocalOp => {
                     if (self.debugFlag) {
                         try writer.print("+{d:0>4} | defLocal: ", .{self.getCurrentFrame().ip - 1});
@@ -284,12 +266,9 @@ pub const VM = struct {
                     }
 
                     const trueAddr = self.getCurrentFrame().basePtr + self.getCurrentFrame().function.arity + slot;
-                    const newVal = if (self.stack.peek(0)) |v| v else {
-                        diagnostics.setContext(self, "Expected value in stack");
-                        return Error.CompileError;
-                    };
+                    const newVal = try self.safePeek(diagnostics, 0);
                     if (self.debugFlag) {
-                        try writer.print("slot:{d:>3} : {f} -> {f}\n", .{ slot, self.stack.stackArray[slot], newVal });
+                        try writer.print("slot:{d:>3} : {f} -> {f}\n", .{ slot, self.stack.stackArray[trueAddr], newVal });
                     }
                     self.stack.stackArray[trueAddr] = newVal;
                 },
@@ -299,10 +278,7 @@ pub const VM = struct {
                         try writer.print("+{d:0>4} | jumpIfFalse: ", .{self.getCurrentFrame().ip - 1});
                     }
                     const short = self.advanceShort();
-                    const condition = if (self.stack.peek(0)) |v| v else {
-                        diagnostics.setContext(self, "Expected value in stack");
-                        return Error.CompileError;
-                    };
+                    const condition = try self.safePeek(diagnostics, 0);
                     const conditionBool = if (condition.isBool()) condition.asBool() else {
                         diagnostics.setContext(self, "Expected boolean value in stack");
                         return Error.RuntimeError;
@@ -339,12 +315,8 @@ pub const VM = struct {
                     if (self.debugFlag) {
                         try writer.print("+{d:0>4} | popOp: ", .{self.getCurrentFrame().ip - 1});
                     }
-                    if (self.stack.pop()) |v| {
-                        if (self.debugFlag) try writer.print("{f}\n", .{v});
-                    } else {
-                        diagnostics.setContext(self, "Expected value in stack");
-                        return Error.CompileError;
-                    }
+                    const value = try self.safePop(diagnostics);
+                    if (self.debugFlag) try writer.print("{f}\n", .{value});
                 },
                 // else => return Error.CompileErr,
             }
@@ -371,8 +343,8 @@ pub const VM = struct {
 
         const operandsNum = try self.unboxOperands(OperandType.number);
         if (operandsNum) |o| {
-            _ = self.stack.pop();
-            _ = self.stack.pop();
+            _ = try self.safePop(diagnostics);
+            _ = try self.safePop(diagnostics);
             const result = switch (opCode) {
                 .AddOp => o.lVal + o.rVal,
                 .SubOp => o.lVal - o.rVal,
@@ -390,17 +362,17 @@ pub const VM = struct {
         const operandsStr = try self.unboxOperands(OperandType.string);
         if (operandsStr != null and opCode == .AddOp) {
             const o = if (operandsStr) |v| v else unreachable;
-            _ = self.stack.pop();
-            _ = self.stack.pop();
+            _ = try self.safePop(diagnostics);
+            _ = try self.safePop(diagnostics);
             if (opCode != .AddOp) return Error.RuntimeError;
 
             const concatString = try std.mem.concat(alloc, u8, &.{ o.lVal, o.rVal });
             defer alloc.free(concatString);
-            const strPtr = try strings.makeString(concatString, concatString.len, &self.gcAlloc, &self.stringPool, alloc);
+            const strPtr = try objectStore.makeString(concatString, concatString.len, &self.gcAlloc, &self.stringPool, alloc);
             if (self.debugFlag) {
                 try writer.print("{s}\n", .{strPtr.getString()});
             }
-            try self.stack.push(values.Value{ .obj = .{ .String = strPtr } });
+            try self.stack.push(.{ .string = strPtr });
             return;
         }
 
@@ -409,6 +381,102 @@ pub const VM = struct {
             .SubOp => "Operands of operator '-' must both have type number",
             .MultOp => "Operands of operator '*' must both have type number",
             .DivOp => "Operands of operator '/' must both have type number",
+            else => unreachable,
+        };
+        diagnostics.setContext(self, errMsg);
+        return Error.RuntimeError;
+    }
+
+    fn doEqualOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
+        _ = alloc;
+        const operatorName = switch (opCode) {
+            .EqOp => "==",
+            .NeqOp => "!=",
+            else => unreachable,
+        };
+        if (self.debugFlag) {
+            try writer.print("+{d:0>4} | {s}: ", .{ self.getCurrentFrame().ip - 1, operatorName });
+        }
+
+        const rVal = try self.safePop(diagnostics);
+        const lVal = try self.safePop(diagnostics);
+
+        switch (opCode) {
+            .EqOp => {
+                if (std.meta.activeTag(lVal) != std.meta.activeTag(rVal)) { // two values are different type
+                    try self.safePush(.{ .boolean = false }, diagnostics);
+                    return;
+                }
+
+                switch (std.meta.activeTag(lVal)) {
+                    .number => try self.safePush(.{ .boolean = lVal.number == rVal.number }, diagnostics),
+                    .boolean => try self.safePush(.{ .boolean = lVal.boolean == rVal.boolean }, diagnostics),
+                    .nil => try self.safePush(.{ .boolean = true }, diagnostics),
+                    .string => try self.safePush(.{ .boolean = lVal.string == rVal.string }, diagnostics),
+                    .function => try self.safePush(.{ .boolean = lVal.function == rVal.function }, diagnostics),
+                }
+            },
+        }
+    }
+
+    fn doCompareOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
+        _ = alloc;
+        const operatorName = switch (opCode) {
+            .LessOp => "<",
+            .GreaterOp => ">",
+            .LeqOp => "<=",
+            .GeqOp => ">=",
+            .EqOp => "==",
+            .NeqOp => "!=",
+            else => unreachable,
+        };
+        if (self.debugFlag) {
+            try writer.print("+{d:0>4} | {s}: ", .{ self.getCurrentFrame().ip - 1, operatorName });
+        }
+
+        const operandsNum = try self.unboxOperands(OperandType.number);
+        if (operandsNum) |o| {
+            _ = try self.safePop(diagnostics);
+            _ = try self.safePop(diagnostics);
+            const result = switch (opCode) {
+                .LessOp => o.lVal < o.rVal,
+                .GreaterOp => o.lVal > o.rVal,
+                .LeqOp => o.lVal <= o.rVal,
+                .GeqOp => o.lVal >= o.rVal,
+                .EqOp => o.lVal == o.rVal,
+                .NeqOp => o.lVal != o.rVal,
+                else => unreachable,
+            };
+            if (self.debugFlag) {
+                try writer.print("{d}\n", .{result});
+            }
+            try self.stack.push(values.Value{ .boolean = result });
+            return;
+        }
+
+        const operandsBool = try self.unboxOperands(OperandType.boolean);
+        if (operandsBool != null and (opCode == .EqOp or opCode == .NeqOp)) {
+            const o = if (operandsBool) |v| v else unreachable;
+            _ = try self.safePop(diagnostics);
+            _ = try self.safePop(diagnostics);
+
+            const result = switch (opCode) {
+                .EqOp => o.lVal == o.rVal,
+                .NeqOp => o.lVal != o.rVal,
+                else => unreachable,
+            };
+
+            try self.stack.push(values.Value{ .boolean = result });
+            return;
+        }
+
+        const errMsg = switch (opCode) {
+            .LessOp => "Operands of operator '<' must be both have type number",
+            .GreaterOp => "Operands of operator '>' must be both have type number",
+            .LeqOp => "Operands of operator '<=' must be both have type number",
+            .GeqOp => "Operands of operator '>=' must be both have type number",
+            .EqOp => "Operands of operator '==' must be both have type number or boolean",
+            .NeqOp => "Operands of operator '!=' must be both have type number or boolean",
             else => unreachable,
         };
         diagnostics.setContext(self, errMsg);
@@ -431,18 +499,10 @@ pub const VM = struct {
                 }
             },
             .string => {
-                const isStrLeft = result: {
-                    const lObj = if (lPeek.isObj()) lPeek.asObj() else break :result false;
-                    break :result std.meta.activeTag(lObj) == .String;
-                };
-                const isStrRight = result: {
-                    const rObj = if (rPeek.isObj()) rPeek.asObj() else break :result false;
-                    break :result std.meta.activeTag(rObj) == .String;
-                };
-
-                if (isStrLeft and isStrRight) {
-                    const lVal = lPeek.asObj().getString();
-                    const rVal = rPeek.asObj().getString();
+                if (lPeek.asString()) |left| {
+                    const right = rPeek.asString() orelse return null;
+                    const lVal = left.getString();
+                    const rVal = right.getString();
 
                     return .{ .lVal = lVal, .rVal = rVal };
                 }
@@ -477,5 +537,28 @@ pub const VM = struct {
         const lowerU8 = @as(u16, self.getCurrentFrame().function.chunk.codeSlice[self.getCurrentFrame().ip - 1]);
         const offset: u16 = upperU8 << 8 | lowerU8;
         return offset;
+    }
+
+    fn safePush(self: *VM, item: values.Value, diagnostic: *Diagnostic) !void {
+        self.stack.push(item) catch |err| {
+            diagnostic.setContext(self, "Stack Overflow");
+            return err;
+        };
+    }
+
+    fn safePop(self: *VM, diagnostic: *Diagnostic) !values.Value {
+        const value = self.stack.pop() orelse {
+            diagnostic.setContext(self, "Expected value in stack");
+            return Error.CompileError;
+        };
+        return value;
+    }
+
+    fn safePeek(self: *VM, diagnostic: *Diagnostic, depth: usize) !values.Value {
+        const value = self.stack.peek(depth) orelse {
+            diagnostic.setContext(self, "Expected value in stack");
+            return Error.CompileError;
+        };
+        return value;
     }
 };

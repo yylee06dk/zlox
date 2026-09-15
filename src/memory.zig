@@ -1,7 +1,5 @@
 const std = @import("std");
 const objects = @import("objects.zig");
-const strings = @import("strings.zig");
-const functions = @import("functions.zig");
 const Allocator = std.mem.Allocator;
 
 pub const GCAllocator = struct {
@@ -30,14 +28,15 @@ pub const GCAllocator = struct {
             const allocation = item.payload;
             const size = item.size;
             switch (allocation) {
-                .String => |s| {
+                .string => |s| {
                     const objAsBytes: [*]u8 = @ptrCast(s);
                     const totalObject: []u8 = objAsBytes[0..size];
                     // This cast is safe since every object comes from alignedAlloc
-                    const totalObjectWithAlign = @as([]align(@alignOf(strings.ObjectString)) u8, @alignCast(totalObject));
+                    const totalObjectWithAlign = @as([]align(@alignOf(objects.Object.String)) u8, @alignCast(totalObject));
                     alloc.free(totalObjectWithAlign);
                 },
-                .Function => |f| {
+                .function => |f| {
+                    f.chunk.deinit(alloc);
                     alloc.destroy(f);
                 },
             }
@@ -66,10 +65,10 @@ pub const GCAllocator = struct {
             const allocation = item.payload;
             const size = item.size;
             switch (allocation) {
-                .String => |s| {
+                .string => |s| {
                     try writer.print("String: {s} | size: {d}\n", .{ s.getString(), size });
                 },
-                .Function => |f| {
+                .function => |f| {
                     try writer.print("Function: {s} | size: {d}\n", .{ f.getName(), size });
                 },
             }

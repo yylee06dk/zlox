@@ -1,7 +1,6 @@
 const std = @import("std");
 const values = @import("values.zig");
 const objects = @import("objects.zig");
-const strings = @import("strings.zig");
 
 const Allocator = std.mem.Allocator;
 const baseSize = 8;
@@ -14,7 +13,7 @@ pub const Table = struct {
     baseArray: []?Entry,
 
     const Entry = struct {
-        key: *strings.ObjectString,
+        key: *objects.Object.String,
         value: values.Value, // 16bytes
     };
 
@@ -32,7 +31,7 @@ pub const Table = struct {
         alloc.free(self.baseArray);
     }
 
-    pub fn set(self: *Table, key: *strings.ObjectString, value: values.Value, alloc: Allocator) !bool {
+    pub fn set(self: *Table, key: *objects.Object.String, value: values.Value, alloc: Allocator) !bool {
         if (@as(f64, @floatFromInt(self.capacity)) * loadFactor < @as(f64, @floatFromInt(self.count + 1))) {
             try self.growCapacity(alloc);
         }
@@ -46,7 +45,7 @@ pub const Table = struct {
         return isNewKey;
     }
 
-    pub fn get(self: *const Table, key: *strings.ObjectString) ?values.Value {
+    pub fn get(self: *const Table, key: *objects.Object.String) ?values.Value {
         const pos = self.findEntryPos(key);
         if (self.baseArray[pos]) |e| {
             return e.value;
@@ -55,7 +54,7 @@ pub const Table = struct {
         }
     }
 
-    pub fn contains(self: *const Table, string: []const u8, hash: u32) ?*strings.ObjectString {
+    pub fn contains(self: *const Table, string: []const u8, hash: u32) ?*objects.Object.String {
         var expectPos = @mod(hash, self.capacity);
         while (true) : (expectPos = @mod(expectPos + 1, self.capacity)) {
             const e = if (self.baseArray[expectPos]) |e| e else return null;
@@ -68,7 +67,7 @@ pub const Table = struct {
         return null;
     }
 
-    fn findEntryPos(self: *const Table, key: *strings.ObjectString) usize {
+    fn findEntryPos(self: *const Table, key: *objects.Object.String) usize {
         var expectPos = @mod(key.hash, self.capacity);
 
         while (true) : (expectPos = @mod(expectPos + 1, self.capacity)) {
