@@ -21,7 +21,6 @@ pub const Precedence = enum {
     And,
     Equality,
     Comparison,
-    ExpressionIf,
     Term,
     Factor,
     Unary,
@@ -45,6 +44,12 @@ const ruleTable: std.enums.EnumArray(tokens.TokenType, Rule) = .initDefault(.{},
     .Minus = .{ .prefix = Compiler.unary, .infix = Compiler.binary, .prec = .Term },
     .Star = .{ .infix = Compiler.binary, .prec = .Factor },
     .Slash = .{ .infix = Compiler.binary, .prec = .Factor },
+    .EqualEquals = .{ .infix = Compiler.binary, .prec = .Equality },
+    .BangEquals = .{ .infix = Compiler.binary, .prec = .Equality },
+    .Greater = .{ .infix = Compiler.binary, .prec = .Comparison },
+    .GreaterEqual = .{ .infix = Compiler.binary, .prec = .Comparison },
+    .Less = .{ .infix = Compiler.binary, .prec = .Comparison },
+    .LessEqual = .{ .infix = Compiler.binary, .prec = .Comparison },
     .Identifier = .{
         .prefix = Compiler.variable,
     },
@@ -176,7 +181,7 @@ pub const Compiler = struct {
             }
 
             self.resolver.localCount -= 1;
-            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+            try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
         }
         self.resolver.scopeDepth -= 1;
     }
@@ -277,7 +282,7 @@ pub const Compiler = struct {
         const printToken = self.previous;
         try self.expression(alloc, diagnostic);
         try self.consume(tokens.TokenType.Semicolon, printToken, diagnostic, "Expected semicolon at");
-        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PrintOp), self.previous.line);
+        try self.writeByte(alloc, @intFromEnum(bc.opCode.PrintOp));
     }
 
     fn varStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
@@ -299,7 +304,7 @@ pub const Compiler = struct {
         if (self.match(tokens.TokenType.Equals)) {
             try self.expression(alloc, diagnostic);
         } else {
-            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.NilOp), self.previous.line);
+            try self.writeByte(alloc, @intFromEnum(bc.opCode.NilOp));
         }
 
         try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon at");
@@ -321,7 +326,7 @@ pub const Compiler = struct {
         const thenJmpPos = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpIfFalseOp));
 
         // then block
-        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
         try self.statement(alloc, diagnostic);
 
         // Eagerly match else block
@@ -335,7 +340,7 @@ pub const Compiler = struct {
         };
 
         if (elseJmpPos) |e| {
-            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+            try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
             try self.statement(alloc, diagnostic);
             self.patchJump(e, self.output.byteCodeList.items.len) catch |err| {
                 diagnostic.setContext(elseToken, "Too long jump(not represantable with 16bits)");
@@ -353,12 +358,12 @@ pub const Compiler = struct {
         try self.consume(tokens.TokenType.RightParen, leftParenToken, diagnostic, "Expect closing parentheses for");
 
         const jmpToEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpIfFalseOp));
-        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
         try self.statement(alloc, diagnostic);
         const jmpToWhile = try self.markJump(alloc, @intFromEnum(bc.opCode.LoopOp));
         try self.patchJump(jmpToWhile, conditionStart);
         try self.patchJump(jmpToEnd, self.output.byteCodeList.items.len);
-        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
     }
 
     fn forStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
@@ -384,7 +389,7 @@ pub const Compiler = struct {
             conditionStart = self.output.byteCodeList.items.len;
             try self.expression(alloc, diagnostic);
             jumpToEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpIfFalseOp));
-            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+            try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
         }
         try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon after");
         const conditionEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpOp));
@@ -393,7 +398,7 @@ pub const Compiler = struct {
         const incrementStart = self.output.byteCodeList.items.len;
         if (self.current.kind != tokens.TokenType.RightParen) {
             try self.expression(alloc, diagnostic);
-            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+            try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
         }
         const incrementEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.LoopOp));
 
@@ -414,7 +419,7 @@ pub const Compiler = struct {
 
         if (jumpToEnd) |j| {
             try self.patchJump(j, self.output.byteCodeList.items.len);
-            try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+            try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
         }
 
         try self.endScope(alloc);
@@ -433,7 +438,7 @@ pub const Compiler = struct {
     fn expressionStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
         try self.expression(alloc, diagnostic);
         try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon at");
-        try self.output.writeCode(alloc, @intFromEnum(bc.opCode.PopOp), self.previous.line);
+        try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
     }
     // ------------ Expression Parsing functions -------------
     fn literal(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Allocator.Error!void {
@@ -510,7 +515,7 @@ pub const Compiler = struct {
         try self.parsePrecedence(Precedence.Unary, alloc, diagnostic);
 
         switch (opTokenType) {
-            .Minus => try self.output.writeCode(alloc, @intFromEnum(bc.opCode.NegateOp), self.previous.line),
+            .Minus => try self.writeByte(alloc, @intFromEnum(bc.opCode.NegateOp)),
             else => unreachable,
         }
     }
@@ -522,11 +527,17 @@ pub const Compiler = struct {
 
         try self.parsePrecedence(@enumFromInt(@intFromEnum(curPrec) + 1), alloc, diagnostic);
 
-        switch (opTokenType) {
-            .Plus => try self.output.writeCode(alloc, @intFromEnum(bc.opCode.AddOp), self.previous.line),
-            .Minus => try self.output.writeCode(alloc, @intFromEnum(bc.opCode.SubOp), self.previous.line),
-            .Star => try self.output.writeCode(alloc, @intFromEnum(bc.opCode.MultOp), self.previous.line),
-            .Slash => try self.output.writeCode(alloc, @intFromEnum(bc.opCode.DivOp), self.previous.line),
+        switch (opTokenType) { // Maybe need to tweak the line we set to
+            .Plus => try self.writeByte(alloc, @intFromEnum(bc.opCode.AddOp)),
+            .Minus => try self.writeByte(alloc, @intFromEnum(bc.opCode.SubOp)),
+            .Star => try self.writeByte(alloc, @intFromEnum(bc.opCode.MultOp)),
+            .Slash => try self.writeByte(alloc, @intFromEnum(bc.opCode.DivOp)),
+            .EqualEquals => try self.writeByte(alloc, @intFromEnum(bc.opCode.EqOp)),
+            .BangEquals => try self.writeByte(alloc, @intFromEnum(bc.opCode.NeqOp)),
+            .Less => try self.writeByte(alloc, @intFromEnum(bc.opCode.LessOp)),
+            .Greater => try self.writeByte(alloc, @intFromEnum(bc.opCode.GreatOp)),
+            .LessEqual => try self.writeByte(alloc, @intFromEnum(bc.opCode.LeqOp)),
+            .GreaterEqual => try self.writeByte(alloc, @intFromEnum(bc.opCode.GeqOp)),
             else => unreachable,
         }
     }
@@ -568,7 +579,7 @@ pub const Compiler = struct {
     }
     // Basic functions end
 
-    // this currently has too niche of an usage
+    // Basic functions to write to the output field
     fn writeConstant(self: *Compiler, alloc: Allocator, value: values.Value) Allocator.Error!void {
         // Only causes Oom error
         const addr = try self.output.addConstant(alloc, value);
@@ -576,33 +587,25 @@ pub const Compiler = struct {
             unreachable; // Temporary fix
         }
 
+        try self.writeByte(alloc, @intFromEnum(bc.opCode.ConstantOp));
+        try self.writeByte(alloc, @intCast(addr));
+    }
+
+    fn writeByte(self: *Compiler, alloc: Allocator, byte: u8) !void {
         try self.output.writeCode(
             alloc,
-            @intFromEnum(bc.opCode.ConstantOp),
-            self.previous.line,
-        );
-        try self.output.writeCode(
-            alloc,
-            @intCast(addr),
+            byte,
             self.previous.line,
         );
     }
 
     fn writeBytes(self: *Compiler, alloc: Allocator, fstByte: u8, scdByte: u8) !void {
-        try self.output.writeCode(
-            alloc,
-            fstByte,
-            self.previous.line,
-        );
-        try self.output.writeCode(
-            alloc,
-            scdByte,
-            self.previous.line,
-        );
+        try self.writeByte(alloc, fstByte);
+        try self.writeByte(alloc, scdByte);
     }
 
     fn markJump(self: *Compiler, alloc: Allocator, jmpType: u8) !usize {
-        try self.output.writeCode(alloc, jmpType, self.previous.line);
+        try self.writeByte(alloc, jmpType);
         try self.writeBytes(alloc, 0, 0);
         const jmpValPos = self.output.byteCodeList.items.len - 2;
         return jmpValPos;

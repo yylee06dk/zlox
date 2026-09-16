@@ -156,6 +156,12 @@ pub const VM = struct {
                 .AddOp, .SubOp, .MultOp, .DivOp => {
                     try self.doBinaryOp(opCode, writer, alloc, diagnostics);
                 },
+                .EqOp, .NeqOp => {
+                    try self.doEqualOp(opCode, writer, diagnostics);
+                },
+                .LessOp, .GreatOp, .LeqOp, .GeqOp => {
+                    try self.doCompareOp(opCode, writer, diagnostics);
+                },
                 .PrintOp => {
                     if (self.debugFlag) {
                         try writer.print("+{d:0>4} | print: ", .{self.getCurrentFrame().ip - 1});
@@ -387,8 +393,7 @@ pub const VM = struct {
         return Error.RuntimeError;
     }
 
-    fn doEqualOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
-        _ = alloc;
+    fn doEqualOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, diagnostics: *Diagnostic) !void {
         const operatorName = switch (opCode) {
             .EqOp => "==",
             .NeqOp => "!=",
@@ -401,33 +406,57 @@ pub const VM = struct {
         const rVal = try self.safePop(diagnostics);
         const lVal = try self.safePop(diagnostics);
 
+        var result: bool = undefined;
         switch (opCode) {
             .EqOp => {
                 if (std.meta.activeTag(lVal) != std.meta.activeTag(rVal)) { // two values are different type
                     try self.safePush(.{ .boolean = false }, diagnostics);
+                    if (self.debugFlag) {
+                        try writer.print("{}\n", .{false});
+                    }
                     return;
                 }
 
-                switch (std.meta.activeTag(lVal)) {
-                    .number => try self.safePush(.{ .boolean = lVal.number == rVal.number }, diagnostics),
-                    .boolean => try self.safePush(.{ .boolean = lVal.boolean == rVal.boolean }, diagnostics),
-                    .nil => try self.safePush(.{ .boolean = true }, diagnostics),
-                    .string => try self.safePush(.{ .boolean = lVal.string == rVal.string }, diagnostics),
-                    .function => try self.safePush(.{ .boolean = lVal.function == rVal.function }, diagnostics),
-                }
+                result = switch (std.meta.activeTag(lVal)) {
+                    .number => lVal.number == rVal.number,
+                    .boolean => lVal.boolean == rVal.boolean,
+                    .nil => true,
+                    .string => lVal.string == rVal.string,
+                    .function => lVal.function == rVal.function,
+                };
+
             },
+            .NeqOp => {
+                if (std.meta.activeTag(lVal) != std.meta.activeTag(rVal)) { // two values are different type
+                    try self.safePush(.{ .boolean = true }, diagnostics);
+                    if (self.debugFlag) {
+                        try writer.print("{}\n", .{true});
+                    }
+                    return;
+                }
+
+                result = switch (std.meta.activeTag(lVal)) {
+                    .number => lVal.number != rVal.number,
+                    .boolean => lVal.boolean != rVal.boolean,
+                    .nil => false,
+                    .string => lVal.string != rVal.string,
+                    .function => lVal.function != rVal.function,
+                };
+            },
+            else => unreachable,
         }
+        if (self.debugFlag) {
+            try writer.print("{}\n", .{result});
+        }
+        try self.safePush(.{ .boolean = result }, diagnostics);
     }
 
-    fn doCompareOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
-        _ = alloc;
+    fn doCompareOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, diagnostics: *Diagnostic) !void {
         const operatorName = switch (opCode) {
             .LessOp => "<",
-            .GreaterOp => ">",
+            .GreatOp => ">",
             .LeqOp => "<=",
             .GeqOp => ">=",
-            .EqOp => "==",
-            .NeqOp => "!=",
             else => unreachable,
         };
         if (self.debugFlag) {
@@ -440,43 +469,23 @@ pub const VM = struct {
             _ = try self.safePop(diagnostics);
             const result = switch (opCode) {
                 .LessOp => o.lVal < o.rVal,
-                .GreaterOp => o.lVal > o.rVal,
+                .GreatOp => o.lVal > o.rVal,
                 .LeqOp => o.lVal <= o.rVal,
                 .GeqOp => o.lVal >= o.rVal,
-                .EqOp => o.lVal == o.rVal,
-                .NeqOp => o.lVal != o.rVal,
                 else => unreachable,
             };
             if (self.debugFlag) {
-                try writer.print("{d}\n", .{result});
+                try writer.print("{}\n", .{result});
             }
-            try self.stack.push(values.Value{ .boolean = result });
-            return;
-        }
-
-        const operandsBool = try self.unboxOperands(OperandType.boolean);
-        if (operandsBool != null and (opCode == .EqOp or opCode == .NeqOp)) {
-            const o = if (operandsBool) |v| v else unreachable;
-            _ = try self.safePop(diagnostics);
-            _ = try self.safePop(diagnostics);
-
-            const result = switch (opCode) {
-                .EqOp => o.lVal == o.rVal,
-                .NeqOp => o.lVal != o.rVal,
-                else => unreachable,
-            };
-
             try self.stack.push(values.Value{ .boolean = result });
             return;
         }
 
         const errMsg = switch (opCode) {
             .LessOp => "Operands of operator '<' must be both have type number",
-            .GreaterOp => "Operands of operator '>' must be both have type number",
+            .GreatOp => "Operands of operator '>' must be both have type number",
             .LeqOp => "Operands of operator '<=' must be both have type number",
             .GeqOp => "Operands of operator '>=' must be both have type number",
-            .EqOp => "Operands of operator '==' must be both have type number or boolean",
-            .NeqOp => "Operands of operator '!=' must be both have type number or boolean",
             else => unreachable,
         };
         diagnostics.setContext(self, errMsg);

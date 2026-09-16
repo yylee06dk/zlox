@@ -65,7 +65,7 @@ pub const Chunk = struct {
                 try writer.print("[offset: -{d:>3}]\n", .{offset});
                 return 3;
             },
-            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .PrintOp, .PopOp, .NilOp => {
+            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .EqOp, .NeqOp, .LessOp, .GreatOp, .LeqOp, .GeqOp, .PrintOp, .PopOp, .NilOp => {
                 try writer.print("\n", .{});
                 return 1;
             },
