@@ -56,50 +56,59 @@ pub const Table = struct {
 
     pub fn contains(self: *const Table, string: []const u8, hash: u32) ?*objects.Object.String {
         var expectPos = @mod(hash, self.capacity);
-        while (true) : (expectPos = @mod(expectPos + 1, self.capacity)) {
-            const e = if (self.baseArray[expectPos]) |e| e else return null;
+        //std.debug.print("\n", .{});
+        for (0..self.capacity) |_| {
+            expectPos = @mod(expectPos + 1, self.capacity);
+            //std.debug.print("{d}\n", .{expectPos});
+            const entry = self.baseArray[expectPos];
+            //std.debug.print("E:{?}\n", .{entry});
+            if (entry == null) return null;
+            const e = if (entry) |e| e else unreachable;
             if (hash == e.key.hash and e.key.length == string.len) {
                 if (std.mem.eql(u8, e.key.getString(), string)) {
                     return e.key;
                 }
             }
         }
-        return null;
+        unreachable;
     }
 
     fn findEntryPos(self: *const Table, key: *objects.Object.String) usize {
         var expectPos = @mod(key.hash, self.capacity);
 
-        while (true) : (expectPos = @mod(expectPos + 1, self.capacity)) {
+        for (0..self.capacity) |_| {
+            expectPos = @mod(expectPos + 1, self.capacity);
             const entry = self.baseArray[expectPos];
             if (entry) |e| {
-                if (e.key != key) continue; //Available via string interning!
+                if (e.key == key) break;
+                continue;
             }
             break;
         }
         return expectPos;
     }
 
-    fn growCapacity(self: *Table, alloc: Allocator) !void { // In place (in struct's perspective)
+    fn growCapacity(self: *Table, alloc: Allocator) Allocator.Error!void { // In place (in struct's perspective)
         const newCapacity = self.capacity * 2;
-        const ptrNew = try alloc.realloc(self.baseArray, newCapacity);
-        self.capacity = newCapacity;
+        const ptrOld = self.baseArray;
+        const ptrNew = try alloc.alloc(?Entry, newCapacity);
+        defer alloc.free(ptrOld);
+        errdefer alloc.free(ptrNew);
+        initSliceWithNull(ptrNew);
 
-        const tempTable = Table{
-            .count = self.count,
+        var tempTable: Table = .{
             .capacity = newCapacity,
+            .count = self.count,
             .baseArray = ptrNew,
         };
 
-        initSliceWithNull(ptrNew);
-        for (self.baseArray) |entry| {
-            if (entry) |e| {
-                const idx = tempTable.findEntryPos(e.key);
-                ptrNew[idx] = e;
-            }
+        for (0..self.capacity) |idx| {
+            const oldEntry = self.baseArray[idx] orelse continue;
+            _ = try tempTable.set(oldEntry.key, oldEntry.value, alloc);
         }
 
         self.baseArray = ptrNew;
+        self.capacity = newCapacity;
     }
 };
 
