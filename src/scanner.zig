@@ -103,6 +103,9 @@ pub const Scanner = struct {
                 const hasEqual = self.match('=');
                 return self.makeToken(if (hasEqual) 2 else 1, if (hasEqual) tokens.TokenType.LessEqual else tokens.TokenType.Less);
             },
+            ',' => {
+                return self.makeToken(1, tokens.TokenType.Comma);
+            },
             else => {
                 if (ascii.isDigit(c)) {
                     return self.number();
@@ -179,6 +182,7 @@ pub const Scanner = struct {
                     switch (self.source[start + 1]) {
                         'a' => if (self.checkRest("lse", start + 1, length - 1)) return self.makeToken(length, tokens.TokenType.False),
                         'o' => if (self.checkRest("r", start + 1, length - 1)) return self.makeToken(length, tokens.TokenType.For),
+                        'u' => if (self.checkRest("n", start + 1, length - 1)) return self.makeToken(length, tokens.TokenType.Fun),
                         else => {},
                     }
                 }

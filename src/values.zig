@@ -85,7 +85,8 @@ pub const Value = union(valueType) {
             .boolean => "boolean",
             .number => "number",
             .nil => "nil",
-            .string, .function => "object",
+            .string => "string",
+            .function => "function",
         };
     }
 
@@ -95,8 +96,10 @@ pub const Value = union(valueType) {
             .boolean => |b| try writer.print("{}]", .{b}),
             .number => |n| try writer.print("{}]", .{n}),
             .nil => try writer.print("<nil>]", .{}),
-            .string => |string| try writer.print("{s}]", .{string.getString()}),
-            .function => |function| try writer.print("{s}]", .{function.getName()}),
+            .string => |s| {
+                try writer.print("{s}]", .{s.getString()});
+            },
+            .function => |f| try writer.print("{f}]", .{f.*}),
         }
     }
 };

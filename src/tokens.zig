@@ -32,6 +32,10 @@ pub const TokenType = enum {
     Else,
     While,
     For,
+
+    Fun,
+    Comma,
+
     EOF,
 
     pub fn toString(self: TokenType) []const u8 {
@@ -65,6 +69,7 @@ pub const TokenType = enum {
             .Else => "else",
             .Whlie => "while",
             .For => "for",
+            .Fun => "fun",
             .EOF => "EOF",
         };
     }

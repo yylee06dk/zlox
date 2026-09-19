@@ -40,15 +40,25 @@ pub const Chunk = struct {
 
         try writer.print("{d:0>4} | {d:>4} : {s} ", .{ ip, curLine, curCode.toString() });
         switch (curCode) {
+            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .EqOp, .NeqOp, .LessOp, .GreatOp, .LeqOp, .GeqOp, .PrintOp, .PopOp, .NilOp => {
+                try writer.print("\n", .{});
+                return 1;
+            },
             .ConstantOp, .DefineGlobalOp, .GetGlobalOp, .SetGlobalOp => {
                 const constant_idx = self.codeSlice[ip + 1];
                 const constant = self.constantSlice[constant_idx];
+
                 try writer.print("[addr: {d:>3} -> {f}]\n", .{ constant_idx, constant });
                 return 2;
             },
             .DefineLocalOp, .GetLocalOp, .SetLocalOp => {
                 const slot = self.codeSlice[ip + 1];
                 try writer.print("[slot: {d:>3}]\n", .{slot});
+                return 2;
+            },
+            .CallOp => {
+                const argCount = self.codeSlice[ip + 1];
+                try writer.print("[argCount: {d:>3}]\n", .{argCount});
                 return 2;
             },
             .JumpIfFalseOp, .JumpOp => {
@@ -64,10 +74,6 @@ pub const Chunk = struct {
                 const offset = upperU8 << 8 | lowerU8;
                 try writer.print("[offset: -{d:>3}]\n", .{offset});
                 return 3;
-            },
-            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .EqOp, .NeqOp, .LessOp, .GreatOp, .LeqOp, .GeqOp, .PrintOp, .PopOp, .NilOp => {
-                try writer.print("\n", .{});
-                return 1;
             },
         }
     }

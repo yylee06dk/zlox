@@ -121,31 +121,28 @@ pub const VM = struct {
         while (!self.isAtEnd()) {
             const curCode = self.advance();
             const opCode: bc.opCode = @enumFromInt(curCode);
+            if (self.debugFlag) {
+                try writer.print("+{d:0>4} | {s}: ", .{ self.getCurrentFrame().ip - 1, opCode.toString() });
+            }
             switch (opCode) {
                 .ReturnOp => {
                     if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | returned, peek: {?}\n", .{ self.getCurrentFrame().ip - 1, self.stack.peek(0) });
+                        try writer.print("{?}", .{self.stack.peek(0)});
                     }
                 },
                 .ConstantOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | constant: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const valueAddr = self.advance();
                     const value = self.getConst(valueAddr);
                     try self.safePush(value, diagnostics);
                     if (self.debugFlag) {
-                        try writer.print("{}\n", .{value});
+                        try writer.print("{f}", .{value});
                     }
                 },
                 .NegateOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | negate: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const value = try self.safePop(diagnostics);
                     if (value.isNum()) {
                         if (self.debugFlag) {
-                            try writer.print("{d} -> {d}\n", .{ value.asNum(), -value.asNum() });
+                            try writer.print("{d} -> {d}", .{ value.asNum(), -value.asNum() });
                         }
                         try self.safePush(values.Value{ .number = -value.asNum() }, diagnostics);
                         continue;
@@ -163,22 +160,13 @@ pub const VM = struct {
                     try self.doCompareOp(opCode, writer, diagnostics);
                 },
                 .PrintOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | print: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const value = try self.safePop(diagnostics);
                     try writer.print("{f}\n", .{value});
                 },
                 .NilOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | nilOp \n", .{self.getCurrentFrame().ip - 1});
-                    }
                     try self.safePush(values.Value{ .nil = 1 }, diagnostics);
                 },
                 .DefineGlobalOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | defGlobal: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const value = try self.safePop(diagnostics);
 
                     const defTarget = self.getConst(self.advance()).asString() orelse {
@@ -188,14 +176,11 @@ pub const VM = struct {
 
                     _ = try self.globals.set(defTarget, value, alloc);
                     if (self.debugFlag) {
-                        try writer.print("{s}: {f}\n", .{ defTarget.getString(), value });
+                        try writer.print("{s}: {f}", .{ defTarget.getString(), value });
                     }
                     _ = try self.safePop(diagnostics);
                 },
                 .GetGlobalOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | getGlobal: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const nameObjStr = self.getConst(self.advance()).asString() orelse {
                         diagnostics.setContext(self, "Unaccessible variable <should show what was tried to be accessed>");
                         return Error.CompileError;
@@ -205,14 +190,11 @@ pub const VM = struct {
                         return Error.RuntimeError;
                     };
                     if (self.debugFlag) {
-                        try writer.print("got {f} from {s}\n", .{ value, nameObjStr.getString() });
+                        try writer.print("got {f} from {s}", .{ value, nameObjStr.getString() });
                     }
                     try self.stack.push(value);
                 },
                 .SetGlobalOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | setGlobal: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const nameObjStr = self.getConst(self.advance()).asString() orelse {
                         diagnostics.setContext(self, "Unaccessible variable <should show what was tried to be accessed>");
                         return Error.RuntimeError;
@@ -225,46 +207,37 @@ pub const VM = struct {
                     // Don't check if it's a re-define
                     _ = try self.globals.set(nameObjStr, assignVal, alloc);
                     if (self.debugFlag) {
-                        try writer.print("{s}: {f} -> {f}\n", .{ nameObjStr.getString(), oldVal, assignVal });
+                        try writer.print("{s}: {f} -> {f}", .{ nameObjStr.getString(), oldVal, assignVal });
                     }
                 },
                 // Actually not needed but for debugging purposes, it's here
                 .DefineLocalOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | defLocal: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const slot = self.advance();
                     if (slot >= self.stack.length) {
                         diagnostics.setContext(self, "local variable not found in define stage, should be resolved in compile stage");
                         return Error.CompileError;
                     }
-                    const trueAddr = self.getCurrentFrame().basePtr + self.getCurrentFrame().function.arity + slot;
+                    const trueAddr = self.getCurrentFrame().basePtr + slot;
                     const value = self.stack.stackArray[trueAddr];
                     if (self.debugFlag) {
-                        try writer.print("{d:>3}: {f}\n", .{ slot, value });
+                        try writer.print("{d:>3}: {f}", .{ slot, value });
                     }
                 },
                 .GetLocalOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | getLocal: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const slot = self.advance();
                     if (slot >= self.stack.length) {
                         diagnostics.setContext(self, "local variable not found in get stage, should be resolved in compile stage");
                         return Error.CompileError;
                     }
 
-                    const trueAddr = self.getCurrentFrame().basePtr + self.getCurrentFrame().function.arity + slot;
+                    const trueAddr = self.getCurrentFrame().basePtr + slot;
                     const value = self.stack.stackArray[trueAddr];
                     try self.stack.push(value);
                     if (self.debugFlag) {
-                        try writer.print("{d:>3}: {f}\n", .{ slot, value });
+                        try writer.print("{d:>3}: {f}", .{ slot, value });
                     }
                 },
                 .SetLocalOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | setLocal: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const slot = self.advance();
                     if (slot >= self.stack.length) {
                         diagnostics.setContext(self, "local variable not found in set stage, should be resolved in compile stage");
@@ -274,15 +247,12 @@ pub const VM = struct {
                     const trueAddr = self.getCurrentFrame().basePtr + self.getCurrentFrame().function.arity + slot;
                     const newVal = try self.safePeek(diagnostics, 0);
                     if (self.debugFlag) {
-                        try writer.print("slot:{d:>3} : {f} -> {f}\n", .{ slot, self.stack.stackArray[trueAddr], newVal });
+                        try writer.print("slot:{d:>3} : {f} -> {f}", .{ slot, self.stack.stackArray[trueAddr], newVal });
                     }
                     self.stack.stackArray[trueAddr] = newVal;
                 },
 
                 .JumpIfFalseOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | jumpIfFalse: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const short = self.advanceShort();
                     const condition = try self.safePeek(diagnostics, 0);
                     const conditionBool = if (condition.isBool()) condition.asBool() else {
@@ -294,37 +264,48 @@ pub const VM = struct {
                     }
                     const trueJump = if (!conditionBool) short else 0;
                     if (self.debugFlag) {
-                        try writer.print("condition: {}, jumped {d:>4}\n", .{ conditionBool, trueJump });
+                        try writer.print("condition: {}, jumped {d:>4}", .{ conditionBool, trueJump });
                     }
                 },
                 .JumpOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | jump: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const short = self.advanceShort();
                     self.getCurrentFrame().ip += short;
                     if (self.debugFlag) {
-                        try writer.print("jumped {d:>4}\n", .{short});
+                        try writer.print("jumped {d:>4}", .{short});
                     }
                 },
                 .LoopOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | loop: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const short = self.advanceShort();
                     self.getCurrentFrame().ip -= short;
                     if (self.debugFlag) {
-                        try writer.print("jumped -{d:>4}\n", .{short});
+                        try writer.print("jumped -{d:>4}", .{short});
+                    }
+                },
+                .CallOp => {
+                    const argCount = self.advance();
+                    const basePtr = self.stack.length - argCount - 1;
+                    const funPtr = (try self.safePeek(diagnostics, argCount)).asFunction() orelse {
+                        diagnostics.setContext(self, "Uncallable value given <show it>");
+                        return Error.RuntimeError;
+                    };
+
+                    self.frames[self.frameCount] = .{ .function = funPtr, .ip = 0, .basePtr = basePtr };
+                    self.frameCount += 1;
+
+                    // Exact amount of arguments given?
+                    if (funPtr.arity != argCount) {
+                        diagnostics.setContext(self, "Function call has different arity");
+                        return Error.RuntimeError;
                     }
                 },
                 .PopOp => {
-                    if (self.debugFlag) {
-                        try writer.print("+{d:0>4} | popOp: ", .{self.getCurrentFrame().ip - 1});
-                    }
                     const value = try self.safePop(diagnostics);
-                    if (self.debugFlag) try writer.print("{f}\n", .{value});
+                    if (self.debugFlag) try writer.print("{f}", .{value});
                 },
                 // else => return Error.CompileErr,
+            }
+            if (self.debugFlag) {
+                try writer.print("\n", .{});
             }
             try writer.flush(); // Needed here to check where the runtimeError actually happened(during execution trace)
         }
@@ -336,17 +317,13 @@ pub const VM = struct {
     }
 
     fn doBinaryOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
-        const operatorName = switch (opCode) {
+        const operator = switch (opCode) {
             .AddOp => "+",
             .SubOp => "-",
             .MultOp => "*",
             .DivOp => "/",
             else => unreachable,
         };
-        if (self.debugFlag) {
-            try writer.print("+{d:0>4} | {s}: ", .{ self.getCurrentFrame().ip - 1, operatorName });
-        }
-
         const operandsNum = try self.unboxOperands(OperandType.number);
         if (operandsNum) |o| {
             _ = try self.safePop(diagnostics);
@@ -359,7 +336,7 @@ pub const VM = struct {
                 else => unreachable,
             };
             if (self.debugFlag) {
-                try writer.print("{d}\n", .{result});
+                try writer.print("{d} {s} {d} -> {}", .{ o.lVal, operator, o.rVal, result });
             }
             try self.stack.push(values.Value{ .number = result });
             return;
@@ -376,7 +353,7 @@ pub const VM = struct {
             defer alloc.free(concatString);
             const strPtr = try objectStore.makeString(concatString, concatString.len, &self.gcAlloc, &self.stringPool, alloc);
             if (self.debugFlag) {
-                try writer.print("{s}\n", .{strPtr.getString()});
+                try writer.print("{s} {s} {s} -> {s}", .{ o.lVal, operator, o.rVal, strPtr.getString() });
             }
             try self.stack.push(.{ .string = strPtr });
             return;
@@ -394,15 +371,6 @@ pub const VM = struct {
     }
 
     fn doEqualOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, diagnostics: *Diagnostic) !void {
-        const operatorName = switch (opCode) {
-            .EqOp => "==",
-            .NeqOp => "!=",
-            else => unreachable,
-        };
-        if (self.debugFlag) {
-            try writer.print("+{d:0>4} | {s}: ", .{ self.getCurrentFrame().ip - 1, operatorName });
-        }
-
         const rVal = try self.safePop(diagnostics);
         const lVal = try self.safePop(diagnostics);
 
@@ -412,7 +380,7 @@ pub const VM = struct {
                 if (std.meta.activeTag(lVal) != std.meta.activeTag(rVal)) { // two values are different type
                     try self.safePush(.{ .boolean = false }, diagnostics);
                     if (self.debugFlag) {
-                        try writer.print("{}\n", .{false});
+                        try writer.print("{f} == {f} -> {}", .{ lVal, rVal, false });
                     }
                     return;
                 }
@@ -424,13 +392,12 @@ pub const VM = struct {
                     .string => lVal.string == rVal.string,
                     .function => lVal.function == rVal.function,
                 };
-
             },
             .NeqOp => {
                 if (std.meta.activeTag(lVal) != std.meta.activeTag(rVal)) { // two values are different type
                     try self.safePush(.{ .boolean = true }, diagnostics);
                     if (self.debugFlag) {
-                        try writer.print("{}\n", .{true});
+                        try writer.print("{f} == {f} -> {}", .{ lVal, rVal, true });
                     }
                     return;
                 }
@@ -446,23 +413,19 @@ pub const VM = struct {
             else => unreachable,
         }
         if (self.debugFlag) {
-            try writer.print("{}\n", .{result});
+            try writer.print("{f} == {f} -> {}", .{ lVal, rVal, result });
         }
         try self.safePush(.{ .boolean = result }, diagnostics);
     }
 
     fn doCompareOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, diagnostics: *Diagnostic) !void {
-        const operatorName = switch (opCode) {
+        const operator = switch (opCode) {
             .LessOp => "<",
             .GreatOp => ">",
             .LeqOp => "<=",
             .GeqOp => ">=",
             else => unreachable,
         };
-        if (self.debugFlag) {
-            try writer.print("+{d:0>4} | {s}: ", .{ self.getCurrentFrame().ip - 1, operatorName });
-        }
-
         const operandsNum = try self.unboxOperands(OperandType.number);
         if (operandsNum) |o| {
             _ = try self.safePop(diagnostics);
@@ -475,7 +438,7 @@ pub const VM = struct {
                 else => unreachable,
             };
             if (self.debugFlag) {
-                try writer.print("{}\n", .{result});
+                try writer.print("{d} {s} {d} -> {}", .{ o.lVal, operator, o.rVal, result });
             }
             try self.stack.push(values.Value{ .boolean = result });
             return;

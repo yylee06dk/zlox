@@ -55,6 +55,8 @@ const ruleTable: std.enums.EnumArray(tokens.TokenType, Rule) = .initDefault(.{},
     },
     .LeftParen = .{
         .prefix = Compiler.grouping,
+        .infix = Compiler.call,
+        .prec = .Call,
     },
 });
 
@@ -73,6 +75,7 @@ pub const Compiler = struct {
     compileType: CompileType,
     arity: u8,
     name: ?*const objects.Object.String, //borrowed
+    enclosing: ?*Compiler,
 
     const Error = error{
         ParseFailed,
@@ -98,7 +101,7 @@ pub const Compiler = struct {
         }
     };
 
-    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, compileType: CompileType, arity: u8, name: ?*const objects.Object.String, alloc: Allocator) !Compiler {
+    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, compileType: CompileType, arity: u8, name: ?*const objects.Object.String, enclosing: ?*Compiler, alloc: Allocator) !Compiler {
         var temp: Compiler = .{
             .source = source,
             .tokenList = tokenList,
@@ -110,6 +113,7 @@ pub const Compiler = struct {
             .compileType = compileType,
             .arity = arity,
             .name = name,
+            .enclosing = enclosing,
         };
         // Reserve first slot of (call frame's) stack with function/method name
         const funcName = if (name) |n| n else try objectStore.makeString("", 0, &targetVM.gcAlloc, &targetVM.stringPool, alloc);
@@ -123,15 +127,22 @@ pub const Compiler = struct {
     }
 
     pub fn compileOwnedFunctionObj(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !?*objects.Object.Function {
-        // errdefer self.output.deinit(alloc);
+        errdefer self.output.deinit(alloc);
         // This is double checked since scanner might ignore values
         // This means the input line was not empty so we scanned it, but then it came out empty since it only had errorful contents
         if (self.current.kind == tokens.TokenType.EOF) return null;
-        while (!self.isAtEnd()) {
-            try self.declaration(alloc, diagnostic);
-        }
-        if (self.current.kind != tokens.TokenType.EOF) {
-            return Error.ParseFailed;
+        switch (self.compileType) {
+            .Script => {
+                while (!self.isAtEnd()) {
+                    try self.declaration(alloc, diagnostic);
+                }
+                if (self.current.kind != tokens.TokenType.EOF) {
+                    return Error.ParseFailed;
+                }
+            },
+            .Function => {
+                try self.blockStatement(alloc, diagnostic);
+            },
         }
         // The ownership goes to the caller
         const funcPtr = try objectStore.createEmptyFunction(alloc, &self.targetVM.gcAlloc);
@@ -225,7 +236,7 @@ pub const Compiler = struct {
     // Resolver related functions
 
     // The basic blocks of the compiling process. It's like a abstraction layer
-    fn declaration(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+    fn declaration(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
         if (self.match(tokens.TokenType.Var)) {
             try self.varStatement(alloc, diagnostic);
         } else {
@@ -233,7 +244,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn statement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+    fn statement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
         if (self.match(tokens.TokenType.Print)) {
             try self.printStatement(alloc, diagnostic);
         } else if (self.match(tokens.TokenType.LeftBrace)) {
@@ -244,6 +255,8 @@ pub const Compiler = struct {
             try self.whileStatement(alloc, diagnostic);
         } else if (self.match(tokens.TokenType.For)) {
             try self.forStatement(alloc, diagnostic);
+        } else if (self.match(tokens.TokenType.Fun)) {
+            try self.funStatement(alloc, diagnostic);
         } else {
             try self.expressionStatement(alloc, diagnostic);
         }
@@ -279,9 +292,8 @@ pub const Compiler = struct {
 
     // ------------ Statement Parsing functions -------------
     fn printStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
-        const printToken = self.previous;
         try self.expression(alloc, diagnostic);
-        try self.consume(tokens.TokenType.Semicolon, printToken, diagnostic, "Expected semicolon at");
+        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon after");
         try self.writeByte(alloc, @intFromEnum(bc.opCode.PrintOp));
     }
 
@@ -425,6 +437,50 @@ pub const Compiler = struct {
         try self.endScope(alloc);
     }
 
+    fn funStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) (Errors)!void {
+        const funToken = self.previous;
+
+        const isLocal = self.resolver.scopeDepth > 0;
+        const defOp = @intFromEnum(if (isLocal) bc.opCode.DefineLocalOp else bc.opCode.DefineGlobalOp);
+
+        try self.consume(tokens.TokenType.Identifier, self.current, diagnostic, "Expected function name at");
+
+        const nameString, const addr = try self.parseNamedVariable(self.previous, alloc, diagnostic);
+
+        // Function parameters & content parsing
+        var compiler = try init(self.source, self.tokenList, self.targetVM, CompileType.Function, undefined, nameString, self, alloc);
+        defer compiler.deinit(alloc);
+        // Simple hack to reuse the monolithic tokenList
+        compiler.previous = self.previous;
+        compiler.current = self.current;
+
+        try compiler.consume(tokens.TokenType.LeftParen, funToken, diagnostic, "Expect opening parentheses after");
+
+        compiler.beginScope(); // Start capturing parameters as local variables
+
+        const arity = try compiler.parseParameters(alloc, funToken, diagnostic);
+        compiler.arity = arity;
+        try compiler.consume(tokens.TokenType.RightParen, self.previous, diagnostic, "Expect closing parentheses after");
+
+        try compiler.consume(tokens.TokenType.LeftBrace, self.previous, diagnostic, "Expect opening braces after");
+        const funcPtr = try compiler.compileOwnedFunctionObj(alloc, diagnostic) orelse return; // Nothing to compile.
+        // Done parsing the function
+
+        // Update the parent compiler to the post - function context
+        self.previous = compiler.previous;
+        self.current = compiler.current;
+
+        // This fills the stack with the appropriate function(Object)
+        try self.writeConstant(alloc, .{ .function = funcPtr });
+
+        // This refers to the top of the stack(just filled it above) and defines to the appropriate place
+        if (self.resolveLocal(nameString)) |s| {
+            try self.writeBytes(alloc, defOp, @intCast(s));
+        } else {
+            try self.writeBytes(alloc, defOp, @intCast(addr));
+        }
+    }
+
     fn blockStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
         const leftBrace = self.previous;
         self.beginScope();
@@ -466,6 +522,14 @@ pub const Compiler = struct {
         const leftParen = self.previous;
         try self.expression(alloc, diagnostic);
         try self.consume(tokens.TokenType.RightParen, leftParen, diagnostic, "Unclosed parentheses at");
+    }
+
+    fn call(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Errors!void {
+        _ = canAssign;
+        const leftParen = self.previous;
+        const givenArgumentCount = try self.parseArguments(alloc, leftParen, diagnostic);
+        try self.consume(tokens.TokenType.RightParen, self.previous, diagnostic, "Expect closing parantheses after");
+        try self.writeBytes(alloc, @intFromEnum(bc.opCode.CallOp), givenArgumentCount);
     }
 
     fn number(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Allocator.Error!void {
@@ -631,9 +695,55 @@ pub const Compiler = struct {
         return try self.output.addConstant(alloc, value);
     }
 
-    fn namedVariable(self: *Compiler, nameToken: *tokens.Token, alloc: Allocator) !usize {
-        const ptrStr = try objectStore.makeString(nameToken.getLexeme(self.source), nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value: values.Value = .{ .string = ptrStr };
-        return try self.output.addConstant(alloc, value);
+    fn parseNamedVariable(self: *Compiler, nameToken: *tokens.Token, alloc: Allocator, diagnostic: *Diagnostic) !struct { *objects.Object.String, usize } {
+        const nameString = try objectStore.makeString(self.source[nameToken.start..], nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        // Add the variable name to constant list
+        const addr = try self.output.addConstant(alloc, .{ .string = nameString });
+        // Add the variable itself to resolver
+        if (self.resolver.scopeDepth > 0) { //local!
+            try self.declareVariable(nameString, diagnostic);
+        }
+        return .{ nameString, addr };
+    }
+
+    fn parseParameters(self: *Compiler, alloc: Allocator, functionToken: *tokens.Token, diagnostic: *Diagnostic) !u8 {
+        var arity: u16 = 0;
+        var expectEnd = false;
+        while (!self.isAtEnd() and self.current.kind != tokens.TokenType.RightParen and !expectEnd) {
+            // parse parameter name
+            try self.consume(tokens.TokenType.Identifier, self.previous, diagnostic, "Expect parameter name after");
+            const nameToken = self.previous;
+            const nameString = try objectStore.makeString(self.source[nameToken.start..], nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+            try self.declareVariable(nameString, diagnostic);
+            arity += 1;
+            if (arity > 255) {
+                diagnostic.setContext(functionToken, "Function cannot have arity over 255");
+                return Error.ParseFailed;
+            }
+
+            if (!self.match(tokens.TokenType.Comma)) {
+                expectEnd = true;
+            }
+        }
+        return @intCast(arity);
+    }
+
+    fn parseArguments(self: *Compiler, alloc: Allocator, startToken: *tokens.Token, diagnostic: *Diagnostic) !u8 {
+        var argumentCount: u16 = 0;
+        var expectEnd = false;
+        while (!self.isAtEnd() and self.current.kind != tokens.TokenType.RightParen and !expectEnd) {
+            // parse argument
+            try self.expression(alloc, diagnostic);
+            argumentCount += 1;
+            if (argumentCount > 255) {
+                diagnostic.setContext(startToken, "Function call cannot have arity over 255 at");
+                return Error.ParseFailed;
+            }
+
+            if (!self.match(tokens.TokenType.Comma)) {
+                expectEnd = true;
+            }
+        }
+        return @intCast(argumentCount);
     }
 };

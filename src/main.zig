@@ -128,7 +128,7 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
 
     // Compiler setup
     var compileDiagnostic = compile.Compiler.Diagnostic{};
-    var compiler = try compile.Compiler.init(source, tokenList, machine, compile.Compiler.CompileType.Script, 0, null, init.gpa);
+    var compiler = try compile.Compiler.init(source, tokenList, machine, compile.Compiler.CompileType.Script, 0, null, null, init.gpa);
     defer compiler.deinit(init.gpa);
     var scriptPtr = compiler.compileOwnedFunctionObj(init.gpa, &compileDiagnostic) catch |err| switch (err) {
         error.ParseFailed => {
