@@ -107,7 +107,12 @@ fn runREPL(init: std.process.Init, machine: *vm.VM, interface: *StdInterface) !v
 
         if (line.len == 0) continue; // Nothing given, but EOF not met
 
-        try run(init, line, machine, interface.stdout);
+        run(init, line, machine, interface.stdout) catch |err| switch (err) {
+            error.RuntimeError, error.CompileError => {
+                break;
+            },
+            else => return err, // Fatal errors can just be propagated
+        };
     }
 }
 
@@ -145,16 +150,19 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
     // VM setup
     var vmDiagnostic = vm.VM.Diagnostic{};
     try machine.setTargetFunction(scriptPtr);
-    machine.execute(writer, init.gpa, &vmDiagnostic) catch |err| switch (err) {
-        error.RuntimeError => {
-            vmDiagnostic.report();
-            return;
-        },
-        error.CompileError => {
-            vmDiagnostic.reportFatal();
-            return;
-        },
-        else => return err, // Fatal errors can just be propagated
+    machine.execute(writer, init.gpa, &vmDiagnostic) catch |err| {
+        try writer.flush();
+        switch (err) {
+            error.RuntimeError => {
+                vmDiagnostic.report();
+                return err;
+            },
+            error.CompileError => {
+                vmDiagnostic.reportFatal();
+                return err;
+            },
+            else => return err, // Fatal errors can just be propagated
+        }
     };
     if (DebugMode or DebugGC) {
         try writer.print("==== GC state ====\n{f}\n", .{machine.gcAlloc});

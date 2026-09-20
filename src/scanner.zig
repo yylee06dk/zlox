@@ -167,7 +167,7 @@ pub const Scanner = struct {
         const start = self.current - 1;
 
         while (self.peek()) |c| {
-            if (ascii.isAlphanumeric(c)) {
+            if (ascii.isAlphanumeric(c) or c == '_') {
                 _ = self.advance();
                 continue;
             }
@@ -190,6 +190,7 @@ pub const Scanner = struct {
             'i' => if (self.checkRest("f", start, length)) return self.makeToken(length, tokens.TokenType.If),
             'n' => if (self.checkRest("il", start, length)) return self.makeToken(length, tokens.TokenType.Nil),
             'p' => if (self.checkRest("rint", start, length)) return self.makeToken(length, tokens.TokenType.Print),
+            'r' => if (self.checkRest("eturn", start, length)) return self.makeToken(length, tokens.TokenType.Return),
             't' => if (self.checkRest("rue", start, length)) return self.makeToken(length, tokens.TokenType.True),
             'w' => if (self.checkRest("hile", start, length)) return self.makeToken(length, tokens.TokenType.While),
             'v' => if (self.checkRest("ar", start, length)) return self.makeToken(length, tokens.TokenType.Var),

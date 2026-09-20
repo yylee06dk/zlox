@@ -53,7 +53,7 @@ pub const VM = struct {
         }
 
         pub fn report(self: *Diagnostic) void {
-            print("zlox: RuntimeError: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.getCurrentFrame().ip - 1, self.message });
+            print("\nzlox: RuntimeError: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.getCurrentFrame().ip - 1, self.message });
             var current = self.vmSnapShot.frameCount - 1;
             while (current > 0) : (current -= 1) {
                 const currentFrame = self.vmSnapShot.frames[current];
@@ -63,7 +63,7 @@ pub const VM = struct {
         }
 
         pub fn reportFatal(self: *Diagnostic) void {
-            print("zlox: FATALERROR: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.getCurrentFrame().ip - 1, self.message });
+            print("\nzlox: FATALERROR: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.getCurrentFrame().ip - 1, self.message });
             var current = self.vmSnapShot.frameCount - 1;
             while (current > 0) : (current -= 1) {
                 const currentFrame = self.vmSnapShot.frames[current];
@@ -142,9 +142,11 @@ pub const VM = struct {
             }
             switch (opCode) {
                 .ReturnOp => {
+                    const retVal = try self.safePop(diagnostics);
                     if (self.debugFlag) {
-                        try writer.print("{?}", .{self.stack.peek(0)});
+                        try writer.print("{f}", .{retVal});
                     }
+                    try self.cleanCurrentCall(retVal, diagnostics);
                 },
                 .ConstantOp => {
                     const valueAddr = self.advance();
@@ -247,7 +249,7 @@ pub const VM = struct {
 
                     const trueAddr = self.getCurrentFrame().basePtr + slot;
                     const value = self.stack.stackArray[trueAddr];
-                    try self.stack.push(value);
+                    try self.safePush(value, diagnostics);
                     if (self.debugFlag) {
                         try writer.print("{d:>3}: {f}", .{ slot, value });
                     }
@@ -338,8 +340,7 @@ pub const VM = struct {
             try writer.flush(); // Needed here to check where the runtimeError actually happened(during execution trace)
 
             if (self.isAtEnd()) { // End of function call (the function call may be a call to _script_)
-                std.debug.assert(self.frameCount != 0);
-                self.frameCount -= 1;
+                try self.cleanCurrentCall(null, diagnostics);
             }
         }
         if (self.debugFlag and self.frameCount == 0) {
@@ -563,5 +564,15 @@ pub const VM = struct {
             return Error.CompileError;
         };
         return value;
+    }
+
+    fn cleanCurrentCall(self: *VM, returnVal: ?values.Value, diagnostic: *Diagnostic) !void {
+        std.debug.assert(self.frameCount != 0);
+        self.frameCount -= 1;
+        self.stack.length = self.frames[self.frameCount].basePtr;
+        const retVal: values.Value = if (returnVal) |v| v else .{ .nil = 1 };
+        if (self.frameCount > 0) {
+            try self.safePush(retVal, diagnostic);
+        }
     }
 };

@@ -35,6 +35,7 @@ pub const TokenType = enum {
 
     Fun,
     Comma,
+    Return,
 
     EOF,
 

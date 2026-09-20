@@ -257,6 +257,8 @@ pub const Compiler = struct {
             try self.whileStatement(alloc, diagnostic, writer);
         } else if (self.match(tokens.TokenType.For)) {
             try self.forStatement(alloc, diagnostic, writer);
+        } else if (self.match(tokens.TokenType.Return)) {
+            try self.returnStatement(alloc, diagnostic);
         } else {
             try self.expressionStatement(alloc, diagnostic);
         }
@@ -473,6 +475,16 @@ pub const Compiler = struct {
         }
 
         try self.endScope(alloc);
+    }
+
+    fn returnStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+        if (self.match(tokens.TokenType.Semicolon)) {
+            try self.writeByte(alloc, @intFromEnum(bc.opCode.NilOp));
+        } else {
+            try self.expression(alloc, diagnostic);
+            try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon after");
+        }
+        try self.writeByte(alloc, @intFromEnum(bc.opCode.ReturnOp));
     }
 
     fn blockStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) Errors!void {
