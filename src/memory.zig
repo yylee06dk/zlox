@@ -69,7 +69,7 @@ pub const GCAllocator = struct {
                     try writer.print("String: {s} | size: {d}\n", .{ s.getString(), size });
                 },
                 .function => |f| {
-                    try writer.print("Function: {s} | size: {d}\n", .{ f.getName(), size });
+                    try writer.print("Function: {f} | size: {d}\n", .{ f.*, size });
                 },
             }
         }

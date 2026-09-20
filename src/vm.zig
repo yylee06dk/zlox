@@ -116,13 +116,13 @@ pub const VM = struct {
 
     pub fn execute(self: *VM, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
         if (self.debugFlag) {
-            try writer.print("==== VM Execute Trace: {s} ====\n", .{self.getCurrentFrame().function.getName()});
+            try writer.print("==== VM Execute Trace ====\n", .{});
         }
-        while (!self.isAtEnd()) {
+        while (self.frameCount >= 1 and !self.isAtEnd()) {
             const curCode = self.advance();
             const opCode: bc.opCode = @enumFromInt(curCode);
             if (self.debugFlag) {
-                try writer.print("+{d:0>4} | {s}: ", .{ self.getCurrentFrame().ip - 1, opCode.toString() });
+                try writer.print("{f}+{d:0>4} | {s}: ", .{ self.getCurrentFrame().function.*, self.getCurrentFrame().ip - 1, opCode.toString() });
             }
             switch (opCode) {
                 .ReturnOp => {
@@ -297,6 +297,14 @@ pub const VM = struct {
                         diagnostics.setContext(self, "Function call has different arity");
                         return Error.RuntimeError;
                     }
+                    if (self.debugFlag) {
+                        try writer.print("{f} in depth {d} with args", .{ funPtr, self.frameCount });
+                        var idx = argCount;
+                        while (idx > 0) : (idx -= 1) {
+                            const arg = self.stack.stackArray[self.stack.length - idx];
+                            try writer.print(" {f}", .{arg});
+                        }
+                    }
                 },
                 .PopOp => {
                     const value = try self.safePop(diagnostics);
@@ -304,16 +312,19 @@ pub const VM = struct {
                 },
                 // else => return Error.CompileErr,
             }
-            if (self.debugFlag) {
+            if (self.debugFlag and opCode != .PrintOp) {
                 try writer.print("\n", .{});
             }
             try writer.flush(); // Needed here to check where the runtimeError actually happened(during execution trace)
+
+            if (self.isAtEnd()) { // End of function call (the function call may be a call to _script_)
+                std.debug.assert(self.frameCount != 0);
+                self.frameCount -= 1;
+            }
         }
-        if (self.debugFlag) {
-            try writer.print("==== VM Execute Trace ====\n", .{});
+        if (self.debugFlag and self.frameCount == 0) {
+            try writer.print("==== VM Execute Trace ====\n\n", .{});
         }
-        std.debug.assert(self.frameCount != 0);
-        self.frameCount -= 1;
     }
 
     fn doBinaryOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {

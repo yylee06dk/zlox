@@ -7,16 +7,16 @@ pub const Function = struct {
     name: ?*const String = undefined,
     arity: u8 = undefined,
 
-    pub fn getName(self: *const Function) []const u8 {
+    fn getName(self: *const Function) []const u8 {
         if (self.name) |name| {
             return name.getString();
         }
-        return "<script>";
+        return "_script_";
     }
     pub fn format(
         self: @This(),
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
-        try writer.print("{s}", .{self.getName()});
+        try writer.print("<fn {s}>", .{self.getName()});
     }
 };

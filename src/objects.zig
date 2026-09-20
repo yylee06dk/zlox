@@ -42,21 +42,14 @@ pub const Object = union(ObjectType) {
         return strPtr.getString();
     }
 
-    pub fn getName(self: Object) []const u8 {
-        std.debug.assert(std.meta.activeTag(self) == .function);
-        const funcPtr = self.function;
-        return funcPtr.getName();
-    }
-
     // --- Pretty Printing
-
     pub fn format(
         self: @This(),
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
         switch (self) {
             .string => |string| try writer.print("{s}", .{string.getString()}),
-            .function => |function| try writer.print("{s}", .{function.getName()}),
+            .function => |function| try writer.print("{f}", .{function.*}),
         }
     }
 };
