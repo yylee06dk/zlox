@@ -13,6 +13,17 @@ pub const Function = struct {
         }
         return "_script_";
     }
+
+    pub fn formatTotal(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try writer.print("{f}\n", .{self});
+        try writer.print("BYTE | LINE | --------\n", .{});
+        try self.chunk.printChunk(writer);
+        try writer.print("\n", .{});
+        try writer.flush();
+    }
     pub fn format(
         self: @This(),
         writer: *std.Io.Writer,

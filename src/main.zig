@@ -9,7 +9,7 @@ const compile = @import("compiler.zig");
 const Allocator = std.mem.Allocator;
 const print = std.debug.print;
 
-const DebugMode = true;
+const DebugMode = @import("common.zig").DebugMode;
 const DebugVM = DebugMode and true;
 const DebugChunk = DebugMode and true;
 const DebugGC = DebugMode and true;
@@ -130,7 +130,7 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
     var compileDiagnostic = compile.Compiler.Diagnostic{};
     var compiler = try compile.Compiler.init(source, tokenList, machine, compile.Compiler.CompileType.Script, 0, null, null, init.gpa);
     defer compiler.deinit(init.gpa);
-    var scriptPtr = compiler.compileOwnedFunctionObj(init.gpa, &compileDiagnostic) catch |err| switch (err) {
+    const scriptPtr = compiler.compileOwnedFunctionObj(init.gpa, &compileDiagnostic, writer) catch |err| switch (err) {
         error.ParseFailed => {
             compileDiagnostic.report(source);
             return;
@@ -139,7 +139,7 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
     } orelse return; // Nothing to compile.
     // Memory controlled by GC
     if (DebugMode or DebugChunk) {
-        try scriptPtr.chunk.printChunk("debugging :)", writer);
+        try writer.print("{f}", .{std.fmt.alt(scriptPtr.*, .formatTotal)});
     }
 
     // VM setup

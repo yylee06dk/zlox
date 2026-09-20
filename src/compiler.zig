@@ -9,7 +9,7 @@ const memory = @import("memory.zig");
 const vm = @import("vm.zig");
 
 const Allocator = std.mem.Allocator;
-const Errors = Allocator.Error || Compiler.Error;
+const Errors = Allocator.Error || Compiler.Error || std.Io.Writer.Error;
 const ruleFunc = *const fn (*Compiler, Allocator, *Compiler.Diagnostic, bool) Errors!void;
 
 const print = std.debug.print;
@@ -126,7 +126,7 @@ pub const Compiler = struct {
         self.resolver.deinit(alloc);
     }
 
-    pub fn compileOwnedFunctionObj(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !?*objects.Object.Function {
+    pub fn compileOwnedFunctionObj(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) !?*objects.Object.Function {
         errdefer self.output.deinit(alloc);
         // This is double checked since scanner might ignore values
         // This means the input line was not empty so we scanned it, but then it came out empty since it only had errorful contents
@@ -134,14 +134,14 @@ pub const Compiler = struct {
         switch (self.compileType) {
             .Script => {
                 while (!self.isAtEnd()) {
-                    try self.declaration(alloc, diagnostic);
+                    try self.declaration(alloc, diagnostic, writer);
                 }
                 if (self.current.kind != tokens.TokenType.EOF) {
                     return Error.ParseFailed;
                 }
             },
             .Function => {
-                try self.blockStatement(alloc, diagnostic);
+                try self.blockStatement(alloc, diagnostic, writer);
             },
         }
         // The ownership goes to the caller
@@ -236,27 +236,27 @@ pub const Compiler = struct {
     // Resolver related functions
 
     // The basic blocks of the compiling process. It's like a abstraction layer
-    fn declaration(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+    fn declaration(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) !void {
         if (self.match(tokens.TokenType.Var)) {
-            try self.varStatement(alloc, diagnostic);
+            try self.varDeclaration(alloc, diagnostic);
+        } else if (self.match(tokens.TokenType.Fun)) {
+            try self.funDeclaration(alloc, diagnostic, writer);
         } else {
-            try self.statement(alloc, diagnostic);
+            try self.statement(alloc, diagnostic, writer);
         }
     }
 
-    fn statement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+    fn statement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) !void {
         if (self.match(tokens.TokenType.Print)) {
             try self.printStatement(alloc, diagnostic);
         } else if (self.match(tokens.TokenType.LeftBrace)) {
-            try self.blockStatement(alloc, diagnostic);
+            try self.blockStatement(alloc, diagnostic, writer);
         } else if (self.match(tokens.TokenType.If)) {
-            try self.ifStatement(alloc, diagnostic);
+            try self.ifStatement(alloc, diagnostic, writer);
         } else if (self.match(tokens.TokenType.While)) {
-            try self.whileStatement(alloc, diagnostic);
+            try self.whileStatement(alloc, diagnostic, writer);
         } else if (self.match(tokens.TokenType.For)) {
-            try self.forStatement(alloc, diagnostic);
-        } else if (self.match(tokens.TokenType.Fun)) {
-            try self.funStatement(alloc, diagnostic);
+            try self.forStatement(alloc, diagnostic, writer);
         } else {
             try self.expressionStatement(alloc, diagnostic);
         }
@@ -291,13 +291,52 @@ pub const Compiler = struct {
     // The basic blocks of the compiling process. It's like a uniform layer for compiling
 
     // ------------ Statement Parsing functions -------------
-    fn printStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
-        try self.expression(alloc, diagnostic);
-        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon after");
-        try self.writeByte(alloc, @intFromEnum(bc.opCode.PrintOp));
+    fn funDeclaration(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) (Errors)!void {
+        const funToken = self.previous;
+
+        const isLocal = self.resolver.scopeDepth > 0;
+        const defOp = @intFromEnum(if (isLocal) bc.opCode.DefineLocalOp else bc.opCode.DefineGlobalOp);
+
+        try self.consume(tokens.TokenType.Identifier, self.current, diagnostic, "Expected function name at");
+
+        const nameString, const addr = try self.parseNamedVariable(self.previous, true, alloc, diagnostic);
+
+        // Function parameters & content parsing
+        var compiler = try init(self.source, self.tokenList, self.targetVM, CompileType.Function, undefined, nameString, self, alloc);
+        defer compiler.deinit(alloc);
+        // Simple hack to reuse the monolithic tokenList
+        compiler.previous = self.previous;
+        compiler.current = self.current;
+
+        try compiler.consume(tokens.TokenType.LeftParen, funToken, diagnostic, "Expect opening parentheses after");
+
+        compiler.beginScope(); // Start capturing parameters as local variables
+
+        const arity = try compiler.parseParameters(alloc, funToken, diagnostic);
+        compiler.arity = arity;
+        try compiler.consume(tokens.TokenType.RightParen, self.previous, diagnostic, "Expect closing parentheses after");
+
+        try compiler.consume(tokens.TokenType.LeftBrace, self.previous, diagnostic, "Expect opening braces after");
+        const funcPtr = try compiler.compileOwnedFunctionObj(alloc, diagnostic, writer) orelse return; // Nothing to compile.
+        // Done parsing the function
+        try writer.print("{f}", .{std.fmt.alt(funcPtr.*, .formatTotal)});
+
+        // Update the parent compiler to the post - function context
+        self.previous = compiler.previous;
+        self.current = compiler.current;
+
+        // This fills the stack with the appropriate function(Object)
+        try self.writeConstant(alloc, .{ .function = funcPtr });
+
+        // This refers to the top of the stack(just filled it above) and defines to the appropriate place
+        if (self.resolveLocal(nameString)) |s| {
+            try self.writeBytes(alloc, defOp, @intCast(s));
+        } else {
+            try self.writeBytes(alloc, defOp, @intCast(addr));
+        }
     }
 
-    fn varStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+    fn varDeclaration(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
         const isLocal = self.resolver.scopeDepth > 0;
         const defOp = @intFromEnum(if (isLocal) bc.opCode.DefineLocalOp else bc.opCode.DefineGlobalOp);
 
@@ -321,7 +360,13 @@ pub const Compiler = struct {
         }
     }
 
-    fn ifStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+    fn printStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) !void {
+        try self.expression(alloc, diagnostic);
+        try self.consume(tokens.TokenType.Semicolon, self.previous, diagnostic, "Expected semicolon after");
+        try self.writeByte(alloc, @intFromEnum(bc.opCode.PrintOp));
+    }
+
+    fn ifStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) Errors!void {
         const ifToken = self.previous;
         try self.consume(tokens.TokenType.LeftParen, ifToken, diagnostic, "Expect opening parentheses after");
         const leftParenToken = self.previous;
@@ -332,7 +377,7 @@ pub const Compiler = struct {
 
         // then block
         try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
-        try self.statement(alloc, diagnostic);
+        try self.statement(alloc, diagnostic, writer);
 
         // Eagerly match else block
         const hasElse = self.match(tokens.TokenType.Else);
@@ -346,7 +391,7 @@ pub const Compiler = struct {
 
         if (elseJmpPos) |e| {
             try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
-            try self.statement(alloc, diagnostic);
+            try self.statement(alloc, diagnostic, writer);
             self.patchJump(e, self.output.byteCodeList.items.len) catch |err| {
                 diagnostic.setContext(elseToken, "Too long jump(not represantable with 16bits)");
                 return err;
@@ -354,7 +399,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn whileStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+    fn whileStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) Errors!void {
         const whileToken = self.previous;
         try self.consume(tokens.TokenType.LeftParen, whileToken, diagnostic, "Expect opening parentheses after");
         const leftParenToken = self.previous;
@@ -364,14 +409,14 @@ pub const Compiler = struct {
 
         const jmpToEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.JumpIfFalseOp));
         try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
-        try self.statement(alloc, diagnostic);
+        try self.statement(alloc, diagnostic, writer);
         const jmpToWhile = try self.markJump(alloc, @intFromEnum(bc.opCode.LoopOp));
         try self.patchJump(jmpToWhile, conditionStart);
         try self.patchJump(jmpToEnd, self.output.byteCodeList.items.len);
         try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
     }
 
-    fn forStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+    fn forStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) Errors!void {
         self.beginScope();
         const forToken = self.previous;
         try self.consume(tokens.TokenType.LeftParen, forToken, diagnostic, "Expect opening parentheses after");
@@ -379,7 +424,7 @@ pub const Compiler = struct {
 
         // init
         if (self.match(tokens.TokenType.Var)) {
-            try self.varStatement(alloc, diagnostic);
+            try self.varDeclaration(alloc, diagnostic);
         } else if (self.current.kind != tokens.TokenType.Semicolon) {
             try self.expressionStatement(alloc, diagnostic);
         } else {
@@ -417,7 +462,7 @@ pub const Compiler = struct {
 
         try self.patchJump(conditionEnd, self.output.byteCodeList.items.len);
 
-        try self.statement(alloc, diagnostic);
+        try self.statement(alloc, diagnostic, writer);
 
         const blockEnd = try self.markJump(alloc, @intFromEnum(bc.opCode.LoopOp));
         try self.patchJump(blockEnd, incrementStart);
@@ -430,55 +475,11 @@ pub const Compiler = struct {
         try self.endScope(alloc);
     }
 
-    fn funStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) (Errors)!void {
-        const funToken = self.previous;
-
-        const isLocal = self.resolver.scopeDepth > 0;
-        const defOp = @intFromEnum(if (isLocal) bc.opCode.DefineLocalOp else bc.opCode.DefineGlobalOp);
-
-        try self.consume(tokens.TokenType.Identifier, self.current, diagnostic, "Expected function name at");
-
-        const nameString, const addr = try self.parseNamedVariable(self.previous, true, alloc, diagnostic);
-
-        // Function parameters & content parsing
-        var compiler = try init(self.source, self.tokenList, self.targetVM, CompileType.Function, undefined, nameString, self, alloc);
-        defer compiler.deinit(alloc);
-        // Simple hack to reuse the monolithic tokenList
-        compiler.previous = self.previous;
-        compiler.current = self.current;
-
-        try compiler.consume(tokens.TokenType.LeftParen, funToken, diagnostic, "Expect opening parentheses after");
-
-        compiler.beginScope(); // Start capturing parameters as local variables
-
-        const arity = try compiler.parseParameters(alloc, funToken, diagnostic);
-        compiler.arity = arity;
-        try compiler.consume(tokens.TokenType.RightParen, self.previous, diagnostic, "Expect closing parentheses after");
-
-        try compiler.consume(tokens.TokenType.LeftBrace, self.previous, diagnostic, "Expect opening braces after");
-        const funcPtr = try compiler.compileOwnedFunctionObj(alloc, diagnostic) orelse return; // Nothing to compile.
-        // Done parsing the function
-
-        // Update the parent compiler to the post - function context
-        self.previous = compiler.previous;
-        self.current = compiler.current;
-
-        // This fills the stack with the appropriate function(Object)
-        try self.writeConstant(alloc, .{ .function = funcPtr });
-
-        // This refers to the top of the stack(just filled it above) and defines to the appropriate place
-        if (self.resolveLocal(nameString)) |s| {
-            try self.writeBytes(alloc, defOp, @intCast(s));
-        } else {
-            try self.writeBytes(alloc, defOp, @intCast(addr));
-        }
-    }
-
-    fn blockStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+    fn blockStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) Errors!void {
         const leftBrace = self.previous;
         self.beginScope();
         while (self.current.kind != tokens.TokenType.RightBrace and !self.isAtEnd()) {
-            try self.declaration(alloc, diagnostic);
+            try self.declaration(alloc, diagnostic, writer);
         }
         try self.consume(tokens.TokenType.RightBrace, leftBrace, diagnostic, "Unclosed block at");
         try self.endScope(alloc);
@@ -548,10 +549,10 @@ pub const Compiler = struct {
         const strPtr, const addr = try self.parseNamedVariable(nameToken, false, alloc, diagnostic);
         const slot = self.resolveLocal(strPtr);
         const resolved = slot != null;
-        const s = @as(u8, @intCast(if (slot) |s| s else addr));
 
         const setOp = @intFromEnum(if (isLocal and resolved) bc.opCode.SetLocalOp else bc.opCode.SetGlobalOp);
         const getOp = @intFromEnum(if (isLocal and resolved) bc.opCode.GetLocalOp else bc.opCode.GetGlobalOp);
+        const s = @as(u8, @intCast(if (slot) |s| s else addr));
 
         if (self.match(tokens.TokenType.Equals) and canAssign) {
             try self.expression(alloc, diagnostic);

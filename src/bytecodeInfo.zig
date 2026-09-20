@@ -21,18 +21,14 @@ pub const Chunk = struct {
         alloc.free(self.constantSlice);
     }
 
-    pub fn printChunk(self: *const Chunk, name: []const u8, writer: *std.Io.Writer) !void {
+    pub fn printChunk(self: *const Chunk, writer: *std.Io.Writer) !void {
         var ip: usize = 0; // instruction pointer
         var curLine: usize = 0;
-        try writer.print("==== {s} ====\n", .{name});
-        try writer.print("BYTE | LINE | --------\n", .{});
         while (ip < self.codeSlice.len) {
             curLine = self.lineSlice[ip];
             const offset = try self.printSingleInstruction(ip, writer, curLine);
             ip += offset;
         }
-        try writer.print("==== {s} ====\n", .{name});
-        try writer.flush();
     }
 
     fn printSingleInstruction(self: *const Chunk, ip: usize, writer: *std.Io.Writer, curLine: usize) !usize {
