@@ -54,6 +54,12 @@ pub const VM = struct {
 
         pub fn report(self: *Diagnostic) void {
             print("zlox: RuntimeError: [line:{d:>3}|ip:{d:0>4}] {s}\n", .{ self.getLine(), self.vmSnapShot.getCurrentFrame().ip - 1, self.message });
+            var current = self.vmSnapShot.frameCount - 1;
+            while (current > 0) : (current -= 1) {
+                const currentFrame = self.vmSnapShot.frames[current];
+                const currentLine = currentFrame.function.chunk.lineSlice[0]; // Correct? can't it be empty?
+                print("[line:{d:>3}] in call to {f}\n", .{ currentLine, currentFrame.function });
+            }
         }
 
         fn getLine(self: *const Diagnostic) usize {
@@ -178,7 +184,6 @@ pub const VM = struct {
                     if (self.debugFlag) {
                         try writer.print("{s}: {f}", .{ defTarget.getString(), value });
                     }
-                    _ = try self.safePop(diagnostics);
                 },
                 .GetGlobalOp => {
                     const nameObjStr = self.getConst(self.advance()).asString() orelse {
@@ -291,6 +296,11 @@ pub const VM = struct {
 
                     self.frames[self.frameCount] = .{ .function = funPtr, .ip = 0, .basePtr = basePtr };
                     self.frameCount += 1;
+
+                    if (self.frameCount == maxFrameCount) {
+                        diagnostics.setContext(self, "Stack Overflow");
+                        return Error.RuntimeError;
+                    }
 
                     // Exact amount of arguments given?
                     if (funPtr.arity != argCount) {
