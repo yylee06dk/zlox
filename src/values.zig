@@ -90,6 +90,16 @@ pub const Value = union(valueType) {
         };
     }
 
+    pub fn formatDisplay(self: Value, writer: *std.Io.Writer) !void {
+        switch (self) {
+            .boolean => |b| try writer.print("{}", .{b}),
+            .number => |n| try writer.print("{d}", .{n}),
+            .nil => try writer.print("<nil>", .{}),
+            .string => |s| try writer.print("{s}", .{s.getString()}),
+            .function => |f| try writer.print("{f}", .{f}),
+        }
+    }
+
     pub fn format(self: Value, writer: *std.Io.Writer) !void {
         try writer.print("[type: {s}, value: ", .{self.typeToString()});
         switch (self) {

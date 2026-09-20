@@ -167,7 +167,7 @@ pub const VM = struct {
                 },
                 .PrintOp => {
                     const value = try self.safePop(diagnostics);
-                    try writer.print("{f}\n", .{value});
+                    try writer.print("{f}\n", .{std.fmt.alt(value, .formatDisplay)});
                 },
                 .NilOp => {
                     try self.safePush(values.Value{ .nil = 1 }, diagnostics);
