@@ -9,7 +9,7 @@ const compile = @import("compiler.zig");
 const Allocator = std.mem.Allocator;
 const print = std.debug.print;
 
-const DebugMode = false;
+const DebugMode = true;
 const DebugVM = DebugMode and true;
 const DebugChunk = DebugMode and true;
 const DebugGC = DebugMode and true;
@@ -146,8 +146,12 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
     var vmDiagnostic = vm.VM.Diagnostic{};
     try machine.setTargetFunction(scriptPtr);
     machine.execute(writer, init.gpa, &vmDiagnostic) catch |err| switch (err) {
-        error.RuntimeError, error.CompileError => {
+        error.RuntimeError => {
             vmDiagnostic.report();
+            return;
+        },
+        error.CompileError => {
+            vmDiagnostic.reportFatal();
             return;
         },
         else => return err, // Fatal errors can just be propagated

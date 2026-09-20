@@ -303,14 +303,7 @@ pub const Compiler = struct {
 
         try self.consume(tokens.TokenType.Identifier, self.current, diagnostic, "Expected variable name at");
 
-        const strPtr = try objectStore.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value: values.Value = .{ .string = strPtr };
-        // Add the variable name to constant list
-        const addr = try self.output.addConstant(alloc, value);
-        // Add the variable itself to resolver
-        if (self.resolver.scopeDepth > 0) { //local!
-            try self.declareVariable(strPtr, diagnostic);
-        }
+        const strPtr, const addr = try self.parseNamedVariable(self.previous, true, alloc, diagnostic);
 
         // Check if it has initializer
         if (self.match(tokens.TokenType.Equals)) {
@@ -445,7 +438,7 @@ pub const Compiler = struct {
 
         try self.consume(tokens.TokenType.Identifier, self.current, diagnostic, "Expected function name at");
 
-        const nameString, const addr = try self.parseNamedVariable(self.previous, alloc, diagnostic);
+        const nameString, const addr = try self.parseNamedVariable(self.previous, true, alloc, diagnostic);
 
         // Function parameters & content parsing
         var compiler = try init(self.source, self.tokenList, self.targetVM, CompileType.Function, undefined, nameString, self, alloc);
@@ -551,16 +544,13 @@ pub const Compiler = struct {
 
     fn variable(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) !void {
         const isLocal = self.resolver.scopeDepth > 0;
-
         const nameToken = self.previous;
-        const strPtr = try objectStore.makeString(nameToken.getLexeme(self.source), nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value: values.Value = .{ .string = strPtr };
-        const addr = try self.output.addConstant(alloc, value);
+        const strPtr, const addr = try self.parseNamedVariable(nameToken, false, alloc, diagnostic);
         const slot = self.resolveLocal(strPtr);
         const resolved = slot != null;
         const s = @as(u8, @intCast(if (slot) |s| s else addr));
 
-        const setOp = @intFromEnum(if (isLocal) bc.opCode.SetLocalOp else bc.opCode.SetGlobalOp);
+        const setOp = @intFromEnum(if (isLocal and resolved) bc.opCode.SetLocalOp else bc.opCode.SetGlobalOp);
         const getOp = @intFromEnum(if (isLocal and resolved) bc.opCode.GetLocalOp else bc.opCode.GetGlobalOp);
 
         if (self.match(tokens.TokenType.Equals) and canAssign) {
@@ -688,19 +678,12 @@ pub const Compiler = struct {
     }
 
     // Variable parsing related functions
-    fn parseVariable(self: *Compiler, alloc: Allocator, diagnostics: *Diagnostic) !usize {
-        try self.consume(tokens.TokenType.Identifier, self.current, diagnostics, "Expected variable name at");
-        const strPtr = try objectStore.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value: values.Value = .{ .string = strPtr };
-        return try self.output.addConstant(alloc, value);
-    }
-
-    fn parseNamedVariable(self: *Compiler, nameToken: *tokens.Token, alloc: Allocator, diagnostic: *Diagnostic) !struct { *objects.Object.String, usize } {
+    fn parseNamedVariable(self: *Compiler, nameToken: *tokens.Token, isDeclaration: bool, alloc: Allocator, diagnostic: *Diagnostic) !struct { *objects.Object.String, usize } {
         const nameString = try objectStore.makeString(self.source[nameToken.start..], nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
         // Add the variable name to constant list
         const addr = try self.output.addConstant(alloc, .{ .string = nameString });
         // Add the variable itself to resolver
-        if (self.resolver.scopeDepth > 0) { //local!
+        if (self.resolver.scopeDepth > 0 and isDeclaration) { //local!
             try self.declareVariable(nameString, diagnostic);
         }
         return .{ nameString, addr };

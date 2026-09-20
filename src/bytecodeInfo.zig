@@ -38,41 +38,55 @@ pub const Chunk = struct {
     fn printSingleInstruction(self: *const Chunk, ip: usize, writer: *std.Io.Writer, curLine: usize) !usize {
         const curCode: bc.opCode = @enumFromInt(self.codeSlice[ip]);
 
-        try writer.print("{d:0>4} | {d:>4} : {s} ", .{ ip, curLine, curCode.toString() });
+        try writer.print("{d:0>4} | {d:>4} : {s}\n", .{ ip, curLine, curCode.toString() });
         switch (curCode) {
             .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .EqOp, .NeqOp, .LessOp, .GreatOp, .LeqOp, .GeqOp, .PrintOp, .PopOp, .NilOp => {
-                try writer.print("\n", .{});
                 return 1;
             },
             .ConstantOp, .DefineGlobalOp, .GetGlobalOp, .SetGlobalOp => {
                 const constant_idx = self.codeSlice[ip + 1];
                 const constant = self.constantSlice[constant_idx];
 
-                try writer.print("[addr: {d:>3} -> {f}]\n", .{ constant_idx, constant });
+                const prefix = switch (curCode) {
+                    .ConstantOp => "at",
+                    .GetGlobalOp => "of",
+                    .DefineGlobalOp, .SetGlobalOp => "to",
+                    else => unreachable,
+                };
+
+                try writer.print("     |        {s} addr: {d:>3} -> {f}\n", .{ prefix, constant_idx, constant });
                 return 2;
             },
             .DefineLocalOp, .GetLocalOp, .SetLocalOp => {
                 const slot = self.codeSlice[ip + 1];
-                try writer.print("[slot: {d:>3}]\n", .{slot});
+                const prefix = switch (curCode) {
+                    .GetLocalOp => "at",
+                    .DefineLocalOp, .SetLocalOp => "to",
+                    else => unreachable,
+                };
+
+                try writer.print("     |        {s} slot: {d:>3}\n", .{ prefix, slot });
                 return 2;
             },
             .CallOp => {
                 const argCount = self.codeSlice[ip + 1];
-                try writer.print("[argCount: {d:>3}]\n", .{argCount});
+                try writer.print("     |        with {d} args\n", .{argCount});
                 return 2;
             },
             .JumpIfFalseOp, .JumpOp => {
                 const upperU8 = @as(u16, self.codeSlice[ip + 1]);
                 const lowerU8 = @as(u16, self.codeSlice[ip + 2]);
                 const offset = upperU8 << 8 | lowerU8;
-                try writer.print("[offset: {d:>3}]\n", .{offset});
+                try writer.print("     |        reading short", .{});
+                try writer.print("     |        offset: {d}\n", .{offset});
                 return 3;
             },
             .LoopOp => {
                 const upperU8 = @as(u16, self.codeSlice[ip + 1]);
                 const lowerU8 = @as(u16, self.codeSlice[ip + 2]);
                 const offset = upperU8 << 8 | lowerU8;
-                try writer.print("[offset: -{d:>3}]\n", .{offset});
+                try writer.print("     |        reading short", .{});
+                try writer.print("     |        offset: -{d}\n", .{offset});
                 return 3;
             },
         }
