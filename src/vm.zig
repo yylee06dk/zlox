@@ -229,42 +229,25 @@ pub const VM = struct {
                 },
                 // Actually not needed but for debugging purposes, it's here
                 .DefineLocalOp => {
-                    const slot = self.advance();
-                    if (slot >= self.stack.length) {
-                        diagnostics.setContext(self, "local variable not found in define stage, should be resolved in compile stage");
-                        return Error.CompileError;
-                    }
-                    const trueAddr = self.getCurrentFrame().basePtr + slot;
-                    const value = self.stack.stackArray[trueAddr];
+                    const value, const slot, const dump = try self.safeGetLocal(diagnostics);
+                    _ = dump;
                     if (self.debugFlag) {
                         try writer.print("{d:>3}: {f}", .{ slot, value });
                     }
                 },
                 .GetLocalOp => {
-                    const slot = self.advance();
-                    if (slot >= self.stack.length) {
-                        diagnostics.setContext(self, "local variable not found in get stage, should be resolved in compile stage");
-                        return Error.CompileError;
-                    }
-
-                    const trueAddr = self.getCurrentFrame().basePtr + slot;
-                    const value = self.stack.stackArray[trueAddr];
+                    const value, const slot, const dump = try self.safeGetLocal(diagnostics);
+                    _ = dump;
                     try self.safePush(value, diagnostics);
                     if (self.debugFlag) {
                         try writer.print("{d:>3}: {f}", .{ slot, value });
                     }
                 },
                 .SetLocalOp => {
-                    const slot = self.advance();
-                    if (slot >= self.stack.length) {
-                        diagnostics.setContext(self, "local variable not found in set stage, should be resolved in compile stage");
-                        return Error.CompileError;
-                    }
-
-                    const trueAddr = self.getCurrentFrame().basePtr + self.getCurrentFrame().function.arity + slot;
+                    const oldVal, const slot, const trueAddr = try self.safeGetLocal(diagnostics);
                     const newVal = try self.safePeek(diagnostics, 0);
                     if (self.debugFlag) {
-                        try writer.print("slot:{d:>3} : {f} -> {f}", .{ slot, self.stack.stackArray[trueAddr], newVal });
+                        try writer.print("slot:{d:>3} : {f} -> {f}", .{ slot, oldVal, newVal });
                     }
                     self.stack.stackArray[trueAddr] = newVal;
                 },
@@ -564,6 +547,18 @@ pub const VM = struct {
             return Error.CompileError;
         };
         return value;
+    }
+
+    fn safeGetLocal(self: *VM, diagnostic: *Diagnostic) !struct { values.Value, u8, usize } {
+        const slot = self.advance();
+        const trueAddr = self.getCurrentFrame().basePtr + slot;
+        if (trueAddr >= self.stack.length) {
+            diagnostic.setContext(self, "local variable not found in get stage, should be resolved in compile stage");
+            return Error.CompileError;
+        }
+
+        const value = self.stack.stackArray[trueAddr];
+        return .{ value, slot, trueAddr };
     }
 
     fn cleanCurrentCall(self: *VM, returnVal: ?values.Value, diagnostic: *Diagnostic) !void {

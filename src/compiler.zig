@@ -7,6 +7,7 @@ const objects = @import("objects.zig");
 const objectStore = @import("objectStore.zig");
 const memory = @import("memory.zig");
 const vm = @import("vm.zig");
+const common = @import("common.zig");
 
 const Allocator = std.mem.Allocator;
 const Errors = Allocator.Error || Compiler.Error || std.Io.Writer.Error;
@@ -321,7 +322,9 @@ pub const Compiler = struct {
         try compiler.consume(tokens.TokenType.LeftBrace, self.previous, diagnostic, "Expect opening braces after");
         const funcPtr = try compiler.compileOwnedFunctionObj(alloc, diagnostic, writer) orelse return; // Nothing to compile.
         // Done parsing the function
-        try writer.print("{f}", .{std.fmt.alt(funcPtr.*, .formatTotal)});
+        if (common.DebugMode) {
+            try writer.print("{f}", .{std.fmt.alt(funcPtr.*, .formatTotal)});
+        }
 
         // Update the parent compiler to the post - function context
         self.previous = compiler.previous;
@@ -478,6 +481,10 @@ pub const Compiler = struct {
     }
 
     fn returnStatement(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic) Errors!void {
+        if (self.compileType == .Script) {
+            diagnostic.setContext(self.previous, "Cannot return from top-level code at");
+            return Error.ParseFailed;
+        }
         if (self.match(tokens.TokenType.Semicolon)) {
             try self.writeByte(alloc, @intFromEnum(bc.opCode.NilOp));
         } else {

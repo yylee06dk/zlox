@@ -83,8 +83,8 @@ fn runFile(init: std.process.Init, path: []const u8, machine: *vm.VM, interface:
     defer init.gpa.free(source); // source lives all along this scope --> the whole running process is within its lifetime
     // stdout init
 
-    try run(
-        init,
+    try interpret(
+        init.gpa,
         source,
         machine,
         interface.stdout,
@@ -107,7 +107,7 @@ fn runREPL(init: std.process.Init, machine: *vm.VM, interface: *StdInterface) !v
 
         if (line.len == 0) continue; // Nothing given, but EOF not met
 
-        run(init, line, machine, interface.stdout) catch |err| switch (err) {
+        interpret(init.gpa, line, machine, interface.stdout) catch |err| switch (err) {
             error.RuntimeError, error.CompileError => {
                 break;
             },
@@ -116,14 +116,14 @@ fn runREPL(init: std.process.Init, machine: *vm.VM, interface: *StdInterface) !v
     }
 }
 
-fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std.Io.Writer) !void {
+pub fn interpret(alloc: Allocator, source: []const u8, machine: *vm.VM, writer: *std.Io.Writer) !void {
     // Scanner setup
     var scanDiagnosticList: std.ArrayList(scan.Diagnostic) = .empty;
-    defer scanDiagnosticList.deinit(init.gpa); // Diagnostic list lives within the run-scope.
+    defer scanDiagnosticList.deinit(alloc); // Diagnostic list lives within the run-scope.
 
     var scanner = scan.Scanner.init(source);
-    const tokenList = try scanner.scanTokens(init.gpa, &scanDiagnosticList);
-    defer init.gpa.free(tokenList); // Again, token List lives within the run
+    const tokenList = try scanner.scanTokens(alloc, &scanDiagnosticList);
+    defer alloc.free(tokenList); // Again, token List lives within the run
 
     // Debugging
     // if (scanDiagnosticList.items.len != 0) {
@@ -133,9 +133,9 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
 
     // Compiler setup
     var compileDiagnostic = compile.Compiler.Diagnostic{};
-    var compiler = try compile.Compiler.init(source, tokenList, machine, compile.Compiler.CompileType.Script, 0, null, null, init.gpa);
-    defer compiler.deinit(init.gpa);
-    const scriptPtr = compiler.compileOwnedFunctionObj(init.gpa, &compileDiagnostic, writer) catch |err| switch (err) {
+    var compiler = try compile.Compiler.init(source, tokenList, machine, compile.Compiler.CompileType.Script, 0, null, null, alloc);
+    defer compiler.deinit(alloc);
+    const scriptPtr = compiler.compileOwnedFunctionObj(alloc, &compileDiagnostic, writer) catch |err| switch (err) {
         error.ParseFailed => {
             compileDiagnostic.report(source);
             return;
@@ -150,7 +150,7 @@ fn run(init: std.process.Init, source: []const u8, machine: *vm.VM, writer: *std
     // VM setup
     var vmDiagnostic = vm.VM.Diagnostic{};
     try machine.setTargetFunction(scriptPtr);
-    machine.execute(writer, init.gpa, &vmDiagnostic) catch |err| {
+    machine.execute(writer, alloc, &vmDiagnostic) catch |err| {
         try writer.flush();
         switch (err) {
             error.RuntimeError => {
