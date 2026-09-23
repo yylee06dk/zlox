@@ -120,7 +120,7 @@ pub const VM = struct {
 
     pub fn setTargetFunction(self: *VM, targetFunc: *objects.Object.Function) !void {
         // For the repl session, stack needs to be reset
-        self.stack.clear();
+        self.cleanAll();
 
         const basePtr = self.stack.length;
         try self.stack.push(.{ .function = targetFunc }); // like calling the script/main function
@@ -569,5 +569,10 @@ pub const VM = struct {
         if (self.frameCount > 0) {
             try self.safePush(retVal, diagnostic);
         }
+    }
+
+    fn cleanAll(self: *VM) void {
+        self.frameCount = 0;
+        self.stack.clear();
     }
 };
