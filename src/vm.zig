@@ -21,21 +21,22 @@ pub const VM = struct {
     stringPool: table.Table,
     globals: table.Table,
     gcAlloc: memory.GCAllocator = .{},
+    openUpvalues: ?*objects.Object.Upvalue,
 
     fn getCurrentFrame(self: *const VM) *CallFrame {
         return &self.frames[self.frameCount - 1];
     }
 
     fn getConst(self: *const VM, addr: usize) values.Value {
-        return self.getCurrentFrame().function.chunk.constantSlice[addr];
+        return self.getCurrentFrame().closure.baseFunction.chunk.constantSlice[addr];
     }
 
-    fn getCode(self: *const VM, addr: usize) u8 {
-        return self.getCurrentFrame().function.chunk.codeSlice[addr];
+    fn getCode(self: *const VM, ip: usize) u8 {
+        return self.getCurrentFrame().closure.baseFunction.chunk.codeSlice[ip];
     }
 
-    fn getLine(self: *const VM, addr: usize) usize {
-        return self.getCurrentFrame().function.chunk.lineSlice[addr];
+    fn getLine(self: *const VM, ip: usize) usize {
+        return self.getCurrentFrame().closure.baseFunction.chunk.lineSlice[ip];
     }
 
     pub const Error = error{
@@ -57,8 +58,8 @@ pub const VM = struct {
             var current = self.vmSnapShot.frameCount - 1;
             while (current > 0) : (current -= 1) {
                 const currentFrame = self.vmSnapShot.frames[current];
-                const currentLine = currentFrame.function.chunk.lineSlice[0]; // Correct? can't it be empty?
-                print("[line:{d:>3}] in call to {f}\n", .{ currentLine, currentFrame.function });
+                const currentLine = currentFrame.closure.baseFunction.chunk.lineSlice[0]; // Correct? can't it be empty?
+                print("[line:{d:>3}] in call to {f}\n", .{ currentLine, currentFrame.closure });
             }
         }
 
@@ -67,14 +68,14 @@ pub const VM = struct {
             var current = self.vmSnapShot.frameCount - 1;
             while (current > 0) : (current -= 1) {
                 const currentFrame = self.vmSnapShot.frames[current];
-                const currentLine = currentFrame.function.chunk.lineSlice[0]; // Correct? can't it be empty?
-                print("[line:{d:>3}] in call to {f}\n", .{ currentLine, currentFrame.function });
+                const currentLine = currentFrame.closure.baseFunction.chunk.lineSlice[0]; // Correct? can't it be empty?
+                print("[line:{d:>3}] in call to {f}\n", .{ currentLine, currentFrame.closure });
             }
         }
 
         fn getLine(self: *const Diagnostic) usize {
             const ip = self.vmSnapShot.getCurrentFrame().ip;
-            return self.vmSnapShot.getCurrentFrame().function.chunk.lineSlice[ip];
+            return self.vmSnapShot.getLine(ip);
         }
     };
 
@@ -93,7 +94,7 @@ pub const VM = struct {
     };
 
     const CallFrame = struct {
-        function: *const objects.Object.Function,
+        closure: *const objects.Object.Closure,
         ip: usize,
         basePtr: usize,
     };
@@ -106,6 +107,7 @@ pub const VM = struct {
             .stack = try vmStack.Stack.init(alloc),
             .stringPool = try table.Table.init(alloc),
             .globals = try table.Table.init(alloc),
+            .openUpvalues = null,
         };
     }
 
@@ -118,15 +120,17 @@ pub const VM = struct {
         alloc.free(self.frames);
     }
 
-    pub fn setTargetFunction(self: *VM, targetFunc: *objects.Object.Function) !void {
+    pub fn setTargetFunction(self: *VM, targetFunc: *objects.Object.Function, alloc: Allocator) !void {
         // For the repl session, stack needs to be reset
         self.cleanAll();
 
+        const closurePtr = try objectStore.createClosure(alloc, &self.gcAlloc, targetFunc);
+
         const basePtr = self.stack.length;
-        try self.stack.push(.{ .function = targetFunc }); // like calling the script/main function
+        try self.stack.push(.{ .closure = closurePtr }); // like calling the script/main function
         // No parameters! no need to do additional pushing stuffs
 
-        self.frames[self.frameCount] = .{ .function = targetFunc, .ip = 0, .basePtr = basePtr };
+        self.frames[self.frameCount] = .{ .closure = closurePtr, .ip = 0, .basePtr = basePtr };
         self.frameCount += 1;
     }
 
@@ -138,7 +142,7 @@ pub const VM = struct {
             const curCode = self.advance();
             const opCode: bc.opCode = @enumFromInt(curCode);
             if (self.debugFlag) {
-                try writer.print("{f}+{d:0>4} | {s}: ", .{ self.getCurrentFrame().function.*, self.getCurrentFrame().ip - 1, opCode.toString() });
+                try writer.print("{f}+{d:0>4} | {s}: ", .{ self.getCurrentFrame().closure.*, self.getCurrentFrame().ip - 1, opCode.toString() });
             }
             switch (opCode) {
                 .ReturnOp => {
@@ -284,12 +288,12 @@ pub const VM = struct {
                 .CallOp => {
                     const argCount = self.advance();
                     const basePtr = self.stack.length - argCount - 1;
-                    const funPtr = (try self.safePeek(diagnostics, argCount)).asFunction() orelse {
+                    const closurePtr = (try self.safePeek(diagnostics, argCount)).asClosure() orelse {
                         diagnostics.setContext(self, "Uncallable value given <show it>");
                         return Error.RuntimeError;
                     };
 
-                    self.frames[self.frameCount] = .{ .function = funPtr, .ip = 0, .basePtr = basePtr };
+                    self.frames[self.frameCount] = .{ .closure = closurePtr, .ip = 0, .basePtr = basePtr };
                     self.frameCount += 1;
 
                     if (self.frameCount == maxFrameCount) {
@@ -298,18 +302,48 @@ pub const VM = struct {
                     }
 
                     // Exact amount of arguments given?
-                    if (funPtr.arity != argCount) {
+                    if (closurePtr.baseFunction.arity != argCount) {
                         diagnostics.setContext(self, "Function call has different arity");
                         return Error.RuntimeError;
                     }
                     if (self.debugFlag) {
-                        try writer.print("{f} in depth {d} with args", .{ funPtr, self.frameCount });
+                        try writer.print("{f} in depth {d} with args", .{ closurePtr, self.frameCount });
                         var idx = argCount;
                         while (idx > 0) : (idx -= 1) {
                             const arg = self.stack.stackArray[self.stack.length - idx];
                             try writer.print(" {f}", .{arg});
                         }
                     }
+                },
+                .ClosureOp => {
+                    const funcVal = self.getConst(self.advance());
+                    const funcPtr = funcVal.asFunction() orelse {
+                        diagnostics.setContext(self, "Expected function value after closure operation");
+                        return Error.CompileError;
+                    };
+
+                    var closurePtr = try objectStore.createClosure(alloc, &self.gcAlloc, funcPtr);
+                    for (0..funcPtr.upvalueCount) |idx| {
+                        // Capture happens from the perspective of parent-context
+                        const upvaluePtr = try self.captureUpvalue(alloc, writer);
+                        closurePtr.upvalueObjs[idx] = upvaluePtr;
+                    }
+
+                    try self.safePush(.{ .closure = closurePtr }, diagnostics);
+                    if (self.debugFlag) try writer.print("Closure Made from {f}", .{funcPtr.*});
+                },
+                .GetUpvalueOp => {
+                    const index = self.advance();
+                    const value = self.getCurrentFrame().closure.upvalueObjs[index].value.*;
+                    try self.safePush(value, diagnostics);
+                    if (self.debugFlag) try writer.print("index: {d}, value: {f}", .{ index, value });
+                },
+                .SetUpvalueOp => {
+                    const index = self.advance();
+                    const newVal = try self.safePeek(diagnostics, 0);
+                    const oldVal = self.getCurrentFrame().closure.upvalueObjs[index].value.*;
+                    if (self.debugFlag) try writer.print("index: {d}, value: {f} -> {f}", .{ index, oldVal, newVal });
+                    self.getCurrentFrame().closure.upvalueObjs[index].value.* = newVal;
                 },
                 .PopOp => {
                     const value = try self.safePop(diagnostics);
@@ -405,7 +439,10 @@ pub const VM = struct {
                     .boolean => lVal.boolean == rVal.boolean,
                     .nil => true,
                     .string => lVal.string == rVal.string,
+                    // Need a rework!
                     .function => lVal.function == rVal.function,
+                    .closure => lVal.closure == rVal.closure,
+                    .upvalue => lVal.upvalue == rVal.upvalue,
                 };
             },
             .NeqOp => {
@@ -423,6 +460,8 @@ pub const VM = struct {
                     .nil => false,
                     .string => lVal.string != rVal.string,
                     .function => lVal.function != rVal.function,
+                    .closure => lVal.closure != rVal.closure,
+                    .upvalue => lVal.upvalue != rVal.upvalue,
                 };
             },
             else => unreachable,
@@ -511,17 +550,19 @@ pub const VM = struct {
     fn isAtEnd(
         self: *const VM,
     ) bool {
-        return (self.getCurrentFrame().ip >= self.getCurrentFrame().function.chunk.codeSlice.len);
+        return (self.getCurrentFrame().ip >= self.getCurrentFrame().closure.baseFunction.chunk.codeSlice.len);
     }
 
     fn advance(self: *VM) u8 {
+        const code = self.getCode(self.getCurrentFrame().ip);
         self.getCurrentFrame().ip += 1;
-        return self.getCurrentFrame().function.chunk.codeSlice[self.getCurrentFrame().ip - 1];
+        return code;
     }
     fn advanceShort(self: *VM) u16 {
-        self.getCurrentFrame().ip += 2;
-        const upperU8 = @as(u16, self.getCurrentFrame().function.chunk.codeSlice[self.getCurrentFrame().ip - 2]);
-        const lowerU8 = @as(u16, self.getCurrentFrame().function.chunk.codeSlice[self.getCurrentFrame().ip - 1]);
+        const upperU8 = @as(u16, self.getCode(self.getCurrentFrame().ip));
+        self.getCurrentFrame().ip += 1;
+        const lowerU8 = @as(u16, self.getCode(self.getCurrentFrame().ip));
+        self.getCurrentFrame().ip += 1;
         const offset: u16 = upperU8 << 8 | lowerU8;
         return offset;
     }
@@ -574,5 +615,64 @@ pub const VM = struct {
     fn cleanAll(self: *VM) void {
         self.frameCount = 0;
         self.stack.clear();
+    }
+
+    fn captureUpvalue(self: *VM, alloc: Allocator, writer: *std.Io.Writer) !*objects.Object.Upvalue {
+        const isLocal = self.advance() == 0;
+        // slot in stack or idx to upvalue slice
+        const locationInfo = self.advance();
+
+        const location = if (isLocal) &self.stack.stackArray[self.getCurrentFrame().basePtr + locationInfo] else self.getCurrentFrame().closure.upvalueObjs[locationInfo].value;
+        if (self.debugFlag) {
+            const temp = if (isLocal) "local" else "upvalue";
+            try writer.print("capturing {s} at {d}: {*} -> {f}", .{ temp, locationInfo, location, location.* });
+        }
+        if (isLocal) {
+            const upvaluePtr = self.hasOpenUpvalue(location);
+            if (upvaluePtr) |u| {
+                return u;
+            }
+        }
+        const upvaluePtr = try objectStore.createUpvalue(alloc, &self.gcAlloc, location);
+        // This upvalue is a new one seen!
+        self.insertOpenUpvalue(upvaluePtr);
+
+        return upvaluePtr;
+    }
+
+    fn hasOpenUpvalue(self: *VM, location: *values.Value) ?*objects.Object.Upvalue {
+        var cur = self.openUpvalues;
+        while (cur != null) {
+            const c = cur orelse break;
+
+            if (@intFromPtr(c.value) == @intFromPtr(location)) {
+                return c;
+            }
+            cur = c.next;
+        }
+        return null;
+    }
+
+    fn insertOpenUpvalue(self: *VM, upvaluePtr: *objects.Object.Upvalue) void {
+        var prev = self.openUpvalues orelse {
+            self.openUpvalues = upvaluePtr;
+            return;
+        };
+        var cur = self.openUpvalues;
+        while (cur != null) {
+            const c = cur orelse return;
+            const curAsInt = @intFromPtr(c.value); // position of value in memory
+            if (curAsInt < @intFromPtr(upvaluePtr.value)) { //Found appropriate(stack-order) position
+                if (prev == c) { // Match happened right at the start
+                    self.openUpvalues = upvaluePtr;
+                    upvaluePtr.next = cur;
+                } else {
+                    prev.next = upvaluePtr;
+                    upvaluePtr.next = cur;
+                }
+            }
+            prev = c;
+            cur = c.next;
+        }
     }
 };

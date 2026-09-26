@@ -64,6 +64,16 @@ pub const Chunk = struct {
                 try writer.print("     |        {s} slot: {d:>3}\n", .{ prefix, slot });
                 return 2;
             },
+            .GetUpvalueOp, .SetUpvalueOp => {
+                const idx = self.codeSlice[ip + 1];
+                const prefix = switch (curCode) {
+                    .GetUpvalueOp => "at",
+                    .SetUpvalueOp => "to",
+                    else => unreachable,
+                };
+                try writer.print("     |        {s} index: {d:>3}\n", .{ prefix, idx });
+                return 2;
+            },
             .CallOp => {
                 const argCount = self.codeSlice[ip + 1];
                 try writer.print("     |        with {d} args\n", .{argCount});
@@ -73,7 +83,7 @@ pub const Chunk = struct {
                 const upperU8 = @as(u16, self.codeSlice[ip + 1]);
                 const lowerU8 = @as(u16, self.codeSlice[ip + 2]);
                 const offset = upperU8 << 8 | lowerU8;
-                try writer.print("     |        reading short", .{});
+                try writer.print("     |        reading short\n", .{});
                 try writer.print("     |        offset: {d}\n", .{offset});
                 return 3;
             },
@@ -81,9 +91,19 @@ pub const Chunk = struct {
                 const upperU8 = @as(u16, self.codeSlice[ip + 1]);
                 const lowerU8 = @as(u16, self.codeSlice[ip + 2]);
                 const offset = upperU8 << 8 | lowerU8;
-                try writer.print("     |        reading short", .{});
+                try writer.print("     |        reading short\n", .{});
                 try writer.print("     |        offset: -{d}\n", .{offset});
                 return 3;
+            },
+            .ClosureOp => {
+                const funcPtr = self.constantSlice[self.codeSlice[ip + 1]].asFunction() orelse unreachable;
+                for (0..funcPtr.upvalueCount) |idx| {
+                    const isLocal = self.codeSlice[ip + 2 + 2 * idx] == 0;
+                    const locationInfo = self.codeSlice[ip + 3 + 2 * idx];
+                    try writer.print("     |        {s}\n", .{if (isLocal) "local at slot" else "upvalue at index"});
+                    try writer.print("     |        {d}\n", .{locationInfo});
+                }
+                return 2 + 2 * funcPtr.upvalueCount;
             },
         }
     }

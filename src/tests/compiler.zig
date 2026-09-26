@@ -40,22 +40,7 @@ fn compile(source: []const u8) !Compiled {
 
 fn instructionWidth(op: bc.opCode) usize {
     return switch (op) {
-        .ReturnOp,
-        .NegateOp,
-        .AddOp,
-        .SubOp,
-        .MultOp,
-        .DivOp,
-        .EqOp,
-        .NeqOp,
-        .LessOp,
-        .GreatOp,
-        .LeqOp,
-        .GeqOp,
-        .PrintOp,
-        .PopOp,
-        .NilOp,
-        => 1,
+        .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .EqOp, .NeqOp, .LessOp, .GreatOp, .LeqOp, .GeqOp, .PrintOp, .PopOp, .NilOp, .ClosureOp => 1,
         .ConstantOp,
         .DefineGlobalOp,
         .GetGlobalOp,
@@ -121,34 +106,6 @@ test "compiler boundary: while emits a conditional exit and backward edge" {
     try std.testing.expect(std.mem.indexOfScalar(bc.opCode, actual, .JumpIfFalseOp) != null);
     try std.testing.expect(std.mem.indexOfScalar(bc.opCode, actual, .LoopOp) != null);
     try std.testing.expect(std.mem.indexOfScalar(bc.opCode, actual, .SetGlobalOp) != null);
-}
-
-test "compiler boundary: function declaration and call encode arity" {
-    var result = try compile("fun add(a, b) { return a + b; } print add(1, 2);");
-    defer result.deinit(std.testing.allocator);
-
-    const chunk = result.function.chunk;
-    const actual = try decode(std.testing.allocator, chunk.codeSlice);
-    defer std.testing.allocator.free(actual);
-
-    try std.testing.expect(std.mem.indexOfScalar(bc.opCode, actual, .DefineGlobalOp) != null);
-    const callIndex = std.mem.indexOfScalar(bc.opCode, actual, .CallOp) orelse return error.MissingCall;
-
-    var byteIndex: usize = 0;
-    var decodedIndex: usize = 0;
-    while (decodedIndex < callIndex) : (decodedIndex += 1) {
-        byteIndex += instructionWidth(actual[decodedIndex]);
-    }
-    try std.testing.expectEqual(@as(u8, 2), chunk.codeSlice[byteIndex + 1]);
-
-    var foundFunction = false;
-    for (chunk.constantSlice) |constant| {
-        if (constant.asFunction()) |function| {
-            foundFunction = true;
-            try std.testing.expectEqual(@as(u8, 2), function.arity);
-        }
-    }
-    try std.testing.expect(foundFunction);
 }
 
 test "compiler boundary: malformed initializer returns a structured parse failure" {

@@ -3,6 +3,7 @@ const bci = @import("bytecodeInfo.zig");
 const memory = @import("memory.zig");
 const objects = @import("objects.zig");
 const table = @import("table.zig");
+const values = @import("values.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -44,7 +45,7 @@ pub fn createEmptyFunction(alloc: Allocator, gcAlloc: *memory.GCAllocator) Alloc
     return funcPtr;
 }
 
-pub fn initFunctionInplace(self: *objects.Object.Function, alloc: Allocator, gcAlloc: *memory.GCAllocator, name: ?*const objects.Object.String, chunk: bci.Chunk, arity: u8) Allocator.Error!void {
+pub fn initFunctionInplace(self: *objects.Object.Function, alloc: Allocator, gcAlloc: *memory.GCAllocator, name: ?*const objects.Object.String, chunk: bci.Chunk, arity: u8, upvalueCount: u8) Allocator.Error!void {
     const nameTrueSize = @as(usize, if (name) |n| n.length else 0);
     const chunkTrueSize = chunk.codeSlice.len * @sizeOf(u8) + std.mem.sliceAsBytes(chunk.constantSlice).len + chunk.lineSlice.len * @sizeOf(usize);
 
@@ -52,4 +53,25 @@ pub fn initFunctionInplace(self: *objects.Object.Function, alloc: Allocator, gcA
     self.name = name;
     self.chunk = chunk;
     self.arity = arity;
+    self.upvalueCount = upvalueCount;
+}
+
+pub fn createClosure(alloc: Allocator, gcAlloc: *memory.GCAllocator, baseFunction: *objects.Object.Function) Allocator.Error!*objects.Object.Closure {
+    var closurePtr = try alloc.create(objects.Object.Closure);
+    errdefer alloc.destroy(closurePtr);
+
+    try gcAlloc.addAllocation(.{ .closure = closurePtr }, @sizeOf(objects.Object.Closure), alloc);
+    closurePtr.baseFunction = baseFunction;
+    closurePtr.upvalueObjs = try alloc.alloc(*objects.Object.Upvalue, baseFunction.upvalueCount);
+    try gcAlloc.addAllocation(.{ .closure = closurePtr }, @sizeOf(*objects.Object.Upvalue) * @as(usize, baseFunction.upvalueCount), alloc);
+    return closurePtr;
+}
+
+pub fn createUpvalue(alloc: Allocator, gcAlloc: *memory.GCAllocator, location: *values.Value) Allocator.Error!*objects.Object.Upvalue {
+    var upvaluePtr = try alloc.create(objects.Object.Upvalue);
+    errdefer alloc.destroy(upvaluePtr);
+
+    try gcAlloc.addAllocation(.{ .upvalue = upvaluePtr }, @sizeOf(objects.Object.Upvalue), alloc);
+    upvaluePtr.value = location;
+    return upvaluePtr;
 }

@@ -149,7 +149,7 @@ pub fn interpret(alloc: Allocator, source: []const u8, machine: *vm.VM, writer: 
 
     // VM setup
     var vmDiagnostic = vm.VM.Diagnostic{};
-    try machine.setTargetFunction(scriptPtr);
+    try machine.setTargetFunction(scriptPtr, alloc);
     machine.execute(writer, alloc, &vmDiagnostic) catch |err| {
         try writer.flush();
         switch (err) {

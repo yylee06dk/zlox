@@ -1,15 +1,15 @@
 const std = @import("std");
 const bci = @import("../bytecodeInfo.zig");
 const String = @import("string.zig").String;
+const Function = @import("function.zig").Function;
+const Upvalue = @import("upvalue.zig").Upvalue;
 
-pub const Function = struct {
-    chunk: bci.Chunk = undefined,
-    name: ?*const String = undefined,
-    upvalueCount: u8 = undefined,
-    arity: u8 = undefined,
+pub const Closure = struct {
+    baseFunction: *Function,
+    upvalueObjs: []*Upvalue,
 
-    fn getName(self: *const Function) []const u8 {
-        if (self.name) |name| {
+    fn getName(self: *const Closure) []const u8 {
+        if (self.baseFunction.name) |name| {
             return name.getString();
         }
         return "_script_";
@@ -29,6 +29,6 @@ pub const Function = struct {
         self: @This(),
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
-        try writer.print("<fn {s}>", .{self.getName()});
+        try writer.print("<closure {s}>", .{self.getName()});
     }
 };

@@ -7,6 +7,8 @@ pub const valueType = enum {
     nil,
     string,
     function,
+    closure,
+    upvalue,
 };
 
 pub const Value = union(valueType) {
@@ -15,6 +17,8 @@ pub const Value = union(valueType) {
     nil: u1,
     string: *objects.Object.String,
     function: *objects.Object.Function,
+    closure: *objects.Object.Closure,
+    upvalue: *objects.Object.Upvalue,
 
     pub fn isNum(self: Value) bool {
         return switch (self) {
@@ -39,7 +43,7 @@ pub const Value = union(valueType) {
 
     pub fn isObj(self: Value) bool {
         return switch (self) {
-            .string, .function => true,
+            .string, .function, .closure => true,
             else => false,
         };
     }
@@ -54,6 +58,20 @@ pub const Value = union(valueType) {
     pub fn isFunction(self: Value) bool {
         return switch (self) {
             .function => true,
+            else => false,
+        };
+    }
+
+    pub fn isClosure(self: Value) bool {
+        return switch (self) {
+            .closure => true,
+            else => false,
+        };
+    }
+
+    pub fn isUpvalue(self: Value) bool {
+        return switch (self) {
+            .upvalue => true,
             else => false,
         };
     }
@@ -80,6 +98,20 @@ pub const Value = union(valueType) {
         };
     }
 
+    pub fn asClosure(self: Value) ?*objects.Object.Closure {
+        return switch (self) {
+            .closure => |closure| closure,
+            else => null,
+        };
+    }
+
+    pub fn asUpvalue(self: Value) ?*objects.Object.Upvalue {
+        return switch (self) {
+            .upvalue => |upvalue| upvalue,
+            else => null,
+        };
+    }
+
     fn typeToString(self: Value) []const u8 {
         return switch (self) {
             .boolean => "boolean",
@@ -87,6 +119,8 @@ pub const Value = union(valueType) {
             .nil => "nil",
             .string => "string",
             .function => "function",
+            .closure => "closure",
+            .upvalue => "upvalue",
         };
     }
 
@@ -96,7 +130,9 @@ pub const Value = union(valueType) {
             .number => |n| try writer.print("{d}", .{n}),
             .nil => try writer.print("<nil>", .{}),
             .string => |s| try writer.print("{s}", .{s.getString()}),
-            .function => |f| try writer.print("{f}", .{f}),
+            .function => |f| try writer.print("{f}", .{f.*}),
+            .closure => |c| try writer.print("{f}", .{c.*}),
+            .upvalue => |u| try writer.print("{f}", .{u.*}),
         }
     }
 
@@ -110,6 +146,8 @@ pub const Value = union(valueType) {
                 try writer.print("{s}]", .{s.getString()});
             },
             .function => |f| try writer.print("{f}]", .{f.*}),
+            .closure => |c| try writer.print("{f}]", .{c.*}),
+            .upvalue => |u| try writer.print("{f}]", .{u.*}),
         }
     }
 };

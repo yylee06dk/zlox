@@ -12,6 +12,7 @@ const common = @import("common.zig");
 const Allocator = std.mem.Allocator;
 const Errors = Allocator.Error || Compiler.Error || std.Io.Writer.Error;
 const ruleFunc = *const fn (*Compiler, Allocator, *Compiler.Diagnostic, bool) Errors!void;
+const maxUpvalueCount = 256;
 
 const print = std.debug.print;
 
@@ -77,6 +78,8 @@ pub const Compiler = struct {
     arity: u8,
     name: ?*const objects.Object.String, //borrowed
     enclosing: ?*Compiler,
+    upvalues: *[maxUpvalueCount]Upvalue,
+    upvalueCount: u8,
 
     const Error = error{
         ParseFailed,
@@ -102,6 +105,11 @@ pub const Compiler = struct {
         }
     };
 
+    const Upvalue = struct {
+        index: u8,
+        isLocal: bool,
+    };
+
     pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, compileType: CompileType, arity: u8, name: ?*const objects.Object.String, enclosing: ?*Compiler, alloc: Allocator) !Compiler {
         var temp: Compiler = .{
             .source = source,
@@ -115,6 +123,8 @@ pub const Compiler = struct {
             .arity = arity,
             .name = name,
             .enclosing = enclosing,
+            .upvalues = @ptrCast(try alloc.alloc(Upvalue, maxUpvalueCount)),
+            .upvalueCount = 0,
         };
         // Reserve first slot of (call frame's) stack with function/method name
         const funcName = if (name) |n| n else try objectStore.makeString("", 0, &targetVM.gcAlloc, &targetVM.stringPool, alloc);
@@ -125,6 +135,7 @@ pub const Compiler = struct {
 
     pub fn deinit(self: *Compiler, alloc: Allocator) void {
         self.resolver.deinit(alloc);
+        alloc.free(@as([]Upvalue, @ptrCast(self.upvalues)));
     }
 
     pub fn compileOwnedFunctionObj(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) !?*objects.Object.Function {
@@ -148,13 +159,13 @@ pub const Compiler = struct {
         // The ownership goes to the caller
         const funcPtr = try objectStore.createEmptyFunction(alloc, &self.targetVM.gcAlloc);
         const chunk = try self.output.toOwnedChunk(alloc);
-        try objectStore.initFunctionInplace(funcPtr, alloc, &self.targetVM.gcAlloc, self.name, chunk, self.arity);
+        try objectStore.initFunctionInplace(funcPtr, alloc, &self.targetVM.gcAlloc, self.name, chunk, self.arity, self.upvalueCount);
         return funcPtr;
     }
 
     const Resolver = struct {
         scopeDepth: usize,
-        localCount: usize,
+        localCount: u8,
         locals: []Local, // of length 256 (MAX_U8)
 
         const Local = struct {
@@ -222,7 +233,7 @@ pub const Compiler = struct {
         self.resolver.localCount += 1;
     }
 
-    fn resolveLocal(self: *Compiler, name: *objects.Object.String) ?usize {
+    fn resolveLocal(self: *Compiler, name: *objects.Object.String) ?u8 {
         var idx = self.resolver.localCount;
         // Search for the given name in locals list
         while (idx > 0) { // start from end to meet the innermost declaration(shadowing)
@@ -233,6 +244,40 @@ pub const Compiler = struct {
             }
         }
         return null;
+    }
+
+    fn resolveUpvalue(self: *Compiler, name: *objects.Object.String) ?u8 {
+        if (self.enclosing == null) return null;
+        const current = if (self.enclosing) |v| v else unreachable;
+        const slotLocal = current.resolveLocal(name);
+        if (slotLocal) |sl| {
+            return self.addUpvalue(sl, true);
+        }
+
+        const idxUpvalue = current.resolveUpvalue(name);
+        if (idxUpvalue) |idx| {
+            return self.addUpvalue(idx, false);
+        }
+
+        return null;
+    }
+
+    fn addUpvalue(self: *Compiler, slotPos: u8, isLocal: bool) u8 {
+        var idx = self.upvalueCount;
+        while (idx > 0) {
+            idx -= 1;
+            const cur = self.upvalues.*[idx];
+            if (cur.index == slotPos and cur.isLocal == isLocal) {
+                return idx;
+            }
+        }
+        self.upvalues.*[self.upvalueCount] = .{ .index = slotPos, .isLocal = isLocal };
+        if (self.upvalueCount == std.math.maxInt(u8)) {
+            unreachable;
+            // return Error.ParseFailed; // Later on add it!
+        }
+        self.upvalueCount += 1;
+        return self.upvalueCount - 1;
     }
     // Resolver related functions
 
@@ -302,7 +347,7 @@ pub const Compiler = struct {
 
         try self.consume(tokens.TokenType.Identifier, self.current, diagnostic, "Expected function name at");
 
-        const nameString, const addr = try self.parseNamedVariable(self.previous, true, alloc, diagnostic);
+        const nameString, const nameAddr = try self.parseNamedVariable(self.previous, true, alloc, diagnostic);
 
         // Function parameters & content parsing
         var compiler = try init(self.source, self.tokenList, self.targetVM, CompileType.Function, undefined, nameString, self, alloc);
@@ -330,14 +375,25 @@ pub const Compiler = struct {
         self.previous = compiler.previous;
         self.current = compiler.current;
 
-        // This fills the stack with the appropriate function(Object)
-        try self.writeConstant(alloc, .{ .function = funcPtr });
+        // This fills the stack with the appropriate closure(Object)
+        const funcAddr = try self.output.addConstant(alloc, .{ .function = funcPtr });
+        try self.writeBytes(alloc, @intFromEnum(bc.opCode.ClosureOp), @intCast(funcAddr));
+
+        var idx: usize = 0;
+        while (idx < compiler.upvalueCount) : (idx += 1) {
+            const upvalue = compiler.upvalues.*[idx];
+            if (upvalue.isLocal) {
+                try self.writeBytes(alloc, 0, upvalue.index);
+            } else {
+                try self.writeBytes(alloc, 1, upvalue.index);
+            }
+        }
 
         // This refers to the top of the stack(just filled it above) and defines to the appropriate place
         if (self.resolveLocal(nameString)) |s| {
             try self.writeBytes(alloc, defOp, @intCast(s));
         } else {
-            try self.writeBytes(alloc, defOp, @intCast(addr));
+            try self.writeBytes(alloc, defOp, @intCast(nameAddr));
         }
     }
 
@@ -563,14 +619,28 @@ pub const Compiler = struct {
     }
 
     fn variable(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) !void {
-        const isLocal = self.resolver.scopeDepth > 0;
         const nameToken = self.previous;
         const strPtr, const addr = try self.parseNamedVariable(nameToken, false, alloc, diagnostic);
-        const slot = self.resolveLocal(strPtr);
-        const resolved = slot != null;
+        const slotLocal = self.resolveLocal(strPtr);
+        const resolvedLocal = slotLocal != null;
+        const idxUpvalue = self.resolveUpvalue(strPtr);
+        const resolvedUpvalue = idxUpvalue != null;
 
-        const setOp = @intFromEnum(if (isLocal and resolved) bc.opCode.SetLocalOp else bc.opCode.SetGlobalOp);
-        const getOp = @intFromEnum(if (isLocal and resolved) bc.opCode.GetLocalOp else bc.opCode.GetGlobalOp);
+        const setOp = @intFromEnum(operator: {
+            if (resolvedLocal) break :operator bc.opCode.SetLocalOp;
+            if (resolvedUpvalue) break :operator bc.opCode.SetUpvalueOp;
+            break :operator bc.opCode.SetGlobalOp;
+        });
+        const getOp = @intFromEnum(operator: {
+            if (resolvedLocal) break :operator bc.opCode.GetLocalOp;
+            if (resolvedUpvalue) break :operator bc.opCode.GetUpvalueOp;
+            break :operator bc.opCode.GetGlobalOp;
+        });
+        const slot = operator: {
+            if (resolvedLocal) break :operator slotLocal;
+            if (resolvedUpvalue) break :operator idxUpvalue;
+            break :operator null;
+        };
         const s = @as(u8, @intCast(if (slot) |s| s else addr));
 
         if (self.match(tokens.TokenType.Equals) and canAssign) {

@@ -39,6 +39,13 @@ pub const GCAllocator = struct {
                     f.chunk.deinit(alloc);
                     alloc.destroy(f);
                 },
+                .closure => |c| {
+                    alloc.free(c.upvalueObjs);
+                    alloc.destroy(c);
+                },
+                .upvalue => |u| {
+                    alloc.destroy(u);
+                },
             }
         }
 
@@ -70,6 +77,12 @@ pub const GCAllocator = struct {
                 },
                 .function => |f| {
                     try writer.print("Function: {f} | size: {d}\n", .{ f.*, size });
+                },
+                .closure => |c| {
+                    try writer.print("Closure: {f} | size: {d}\n", .{ c.*, size });
+                },
+                .upvalue => |u| {
+                    try writer.print("Upvalue: {f} | size: {d}\n", .{ u.*, size });
                 },
             }
         }

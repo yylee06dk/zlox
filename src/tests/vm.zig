@@ -39,7 +39,7 @@ fn executeChunk(code: []const u8, constants: []const values.Value, expected: []c
     defer machine.deinit(allocator);
 
     const function = try installScript(&machine, code, constants, allocator);
-    try machine.setTargetFunction(function);
+    try machine.setTargetFunction(function, allocator);
 
     var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
@@ -89,7 +89,7 @@ test "VM boundary regression: printing a trailing-allocation string uses its ori
         &.{.{ .string = string }},
         allocator,
     );
-    try machine.setTargetFunction(function);
+    try machine.setTargetFunction(function, allocator);
 
     var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
@@ -116,7 +116,7 @@ test "VM boundary: invalid operand types return a runtime diagnostic" {
         &.{ .{ .number = 1 }, .{ .boolean = true } },
         allocator,
     );
-    try machine.setTargetFunction(function);
+    try machine.setTargetFunction(function, allocator);
 
     var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
