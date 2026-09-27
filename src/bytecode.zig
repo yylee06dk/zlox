@@ -28,6 +28,7 @@ pub const opCode = enum(u8) {
     ClosureOp,
     GetUpvalueOp,
     SetUpvalueOp,
+    CloseUpvalueOp,
 
     pub fn toString(self: opCode) []const u8 {
         return switch (self) {
@@ -60,6 +61,7 @@ pub const opCode = enum(u8) {
             .ClosureOp => "closure",
             .GetUpvalueOp => "getUpval",
             .SetUpvalueOp => "setUpval",
+            .CloseUpvalueOp => "closeUpval",
         };
     }
 };

@@ -36,7 +36,7 @@ pub const Chunk = struct {
 
         try writer.print("{d:0>4} | {d:>4} : {s}\n", .{ ip, curLine, curCode.toString() });
         switch (curCode) {
-            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .EqOp, .NeqOp, .LessOp, .GreatOp, .LeqOp, .GeqOp, .PrintOp, .PopOp, .NilOp => {
+            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .EqOp, .NeqOp, .LessOp, .GreatOp, .LeqOp, .GeqOp, .PrintOp, .PopOp, .NilOp, .CloseUpvalueOp => {
                 return 1;
             },
             .ConstantOp, .DefineGlobalOp, .GetGlobalOp, .SetGlobalOp => {
@@ -97,6 +97,7 @@ pub const Chunk = struct {
             },
             .ClosureOp => {
                 const funcPtr = self.constantSlice[self.codeSlice[ip + 1]].asFunction() orelse unreachable;
+                try writer.print("     |        {f}\n", .{funcPtr.*});
                 for (0..funcPtr.upvalueCount) |idx| {
                     const isLocal = self.codeSlice[ip + 2 + 2 * idx] == 0;
                     const locationInfo = self.codeSlice[ip + 3 + 2 * idx];

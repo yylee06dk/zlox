@@ -73,5 +73,6 @@ pub fn createUpvalue(alloc: Allocator, gcAlloc: *memory.GCAllocator, location: *
 
     try gcAlloc.addAllocation(.{ .upvalue = upvaluePtr }, @sizeOf(objects.Object.Upvalue), alloc);
     upvaluePtr.value = location;
+    upvaluePtr.next = null;
     return upvaluePtr;
 }

@@ -128,7 +128,7 @@ pub const Compiler = struct {
         };
         // Reserve first slot of (call frame's) stack with function/method name
         const funcName = if (name) |n| n else try objectStore.makeString("", 0, &targetVM.gcAlloc, &targetVM.stringPool, alloc);
-        temp.resolver.locals[0] = .{ .depth = 0, .name = funcName };
+        temp.resolver.locals[0] = .{ .depth = 0, .name = funcName, .isCaptured = false };
         temp.resolver.localCount += 1;
         return temp;
     }
@@ -154,6 +154,8 @@ pub const Compiler = struct {
             },
             .Function => {
                 try self.blockStatement(alloc, diagnostic, writer);
+                // Implicit nil return
+                try self.writeBytes(alloc, @intFromEnum(bc.opCode.NilOp), @intFromEnum(bc.opCode.ReturnOp));
             },
         }
         // The ownership goes to the caller
@@ -171,6 +173,7 @@ pub const Compiler = struct {
         const Local = struct {
             name: *const objects.Object.String,
             depth: usize,
+            isCaptured: bool,
         };
 
         pub fn init(alloc: Allocator) !Resolver {
@@ -203,8 +206,12 @@ pub const Compiler = struct {
                 break;
             }
 
+            if (local.isCaptured) {
+                try self.writeByte(alloc, @intFromEnum(bc.opCode.CloseUpvalueOp));
+            } else {
+                try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
+            }
             self.resolver.localCount -= 1;
-            try self.writeByte(alloc, @intFromEnum(bc.opCode.PopOp));
         }
         self.resolver.scopeDepth -= 1;
     }
@@ -229,6 +236,7 @@ pub const Compiler = struct {
         self.resolver.locals[self.resolver.localCount] = .{
             .name = name,
             .depth = self.resolver.scopeDepth,
+            .isCaptured = false,
         };
         self.resolver.localCount += 1;
     }
@@ -251,6 +259,7 @@ pub const Compiler = struct {
         const current = if (self.enclosing) |v| v else unreachable;
         const slotLocal = current.resolveLocal(name);
         if (slotLocal) |sl| {
+            current.resolver.locals[sl].isCaptured = true;
             return self.addUpvalue(sl, true);
         }
 
@@ -347,6 +356,7 @@ pub const Compiler = struct {
 
         try self.consume(tokens.TokenType.Identifier, self.current, diagnostic, "Expected function name at");
 
+        // This adds the function to the resolver.
         const nameString, const nameAddr = try self.parseNamedVariable(self.previous, true, alloc, diagnostic);
 
         // Function parameters & content parsing

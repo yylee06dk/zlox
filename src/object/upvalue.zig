@@ -3,7 +3,8 @@ const values = @import("../values.zig");
 
 pub const Upvalue = struct {
     value: *values.Value,
-    next: ?*Upvalue,
+    closed: values.Value,
+    next: ?*Upvalue = null,
 
     pub fn format(
         self: @This(),

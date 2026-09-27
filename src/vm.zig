@@ -349,6 +349,13 @@ pub const VM = struct {
                     const value = try self.safePop(diagnostics);
                     if (self.debugFlag) try writer.print("{f}", .{value});
                 },
+                .CloseUpvalueOp => {
+                    const location = &self.stack.stackArray[self.stack.length - 1];
+                    const value = try self.safePop(diagnostics);
+                    if (self.debugFlag) try writer.print("closing {f}", .{value});
+
+                    try self.closeUpvalue(location, diagnostics);
+                },
                 // else => return Error.CompileErr,
             }
             if (self.debugFlag and opCode != .PrintOp) {
@@ -356,9 +363,6 @@ pub const VM = struct {
             }
             try writer.flush(); // Needed here to check where the runtimeError actually happened(during execution trace)
 
-            if (self.isAtEnd()) { // End of function call (the function call may be a call to _script_)
-                try self.cleanCurrentCall(null, diagnostics);
-            }
         }
         if (self.debugFlag and self.frameCount == 0) {
             try writer.print("==== VM Execute Trace ====\n\n", .{});
@@ -494,7 +498,7 @@ pub const VM = struct {
             if (self.debugFlag) {
                 try writer.print("{d} {s} {d} -> {}", .{ o.lVal, operator, o.rVal, result });
             }
-            try self.stack.push(values.Value{ .boolean = result });
+            try self.safePush(.{ .boolean = result }, diagnostics);
             return;
         }
 
@@ -604,6 +608,8 @@ pub const VM = struct {
 
     fn cleanCurrentCall(self: *VM, returnVal: ?values.Value, diagnostic: *Diagnostic) !void {
         std.debug.assert(self.frameCount != 0);
+        const startLocation = &self.stack.stackArray[self.getCurrentFrame().basePtr];
+        try self.closeUpvaluesAfter(startLocation, diagnostic);
         self.frameCount -= 1;
         self.stack.length = self.frames[self.frameCount].basePtr;
         const retVal: values.Value = if (returnVal) |v| v else .{ .nil = 1 };
@@ -625,7 +631,8 @@ pub const VM = struct {
         const location = if (isLocal) &self.stack.stackArray[self.getCurrentFrame().basePtr + locationInfo] else self.getCurrentFrame().closure.upvalueObjs[locationInfo].value;
         if (self.debugFlag) {
             const temp = if (isLocal) "local" else "upvalue";
-            try writer.print("capturing {s} at {d}: {*} -> {f}", .{ temp, locationInfo, location, location.* });
+            print("Debug: {*}\n", .{location});
+            try writer.print("capturing {s} at {d}: {*} -> {f}\n", .{ temp, locationInfo, location, location.* });
         }
         if (isLocal) {
             const upvaluePtr = self.hasOpenUpvalue(location);
@@ -674,5 +681,57 @@ pub const VM = struct {
             prev = c;
             cur = c.next;
         }
+    }
+
+    fn closeUpvalue(self: *VM, location: *values.Value, diagnostic: *Diagnostic) !void {
+        var prev = self.openUpvalues orelse {
+            diagnostic.setContext(self, "No upvalues to be closed. Maybe the \"isCaptured\" field is corrupted");
+            return Error.CompileError;
+        };
+        var cur = self.openUpvalues;
+        while (cur != null) {
+            const c = cur orelse unreachable;
+            if (c.value == location) {
+                if (c == prev) {
+                    self.openUpvalues = c.next;
+                } else {
+                    prev.next = c.next;
+                }
+                c.next = null;
+                c.closed = location.*;
+                c.value = &c.closed;
+            } else if (@intFromPtr(c.value) < @intFromPtr(location)) {
+                break; // Since openUpvalues are ordered in stack-order, we know we don't need to check more
+            }
+            prev = c;
+            cur = c.next;
+        }
+
+        diagnostic.setContext(self, "No upvalue matching to be closed.");
+        return Error.CompileError;
+    }
+
+    fn closeUpvaluesAfter(self: *VM, startLocation: *values.Value, diagnostic: *Diagnostic) !void {
+        _ = diagnostic;
+        var prev = self.openUpvalues orelse return;
+        var cur = self.openUpvalues;
+        while (cur != null) {
+            const c = cur orelse unreachable;
+            if (@intFromPtr(c.value) >= @intFromPtr(startLocation)) { // Need to close it!
+                if (c == prev) {
+                    self.openUpvalues = c.next;
+                } else {
+                    prev.next = c.next;
+                }
+                c.next = null;
+                c.closed = c.value.*;
+                c.value = &c.closed;
+            } else if (@intFromPtr(c.value) < @intFromPtr(startLocation)) {
+                break; // Since openUpvalues are ordered in stack-order, we know we don't need to check more
+            }
+            prev = c;
+            cur = c.next;
+        }
+        return;
     }
 };
