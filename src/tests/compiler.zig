@@ -17,7 +17,7 @@ const Compiled = struct {
 
 fn compile(source: []const u8) !Compiled {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     errdefer machine.deinit(allocator);
 
     var scanDiagnostics: std.ArrayList(scanner.Diagnostic) = .empty;
@@ -111,7 +111,7 @@ test "compiler boundary: while emits a conditional exit and backward edge" {
 test "compiler boundary: malformed initializer returns a structured parse failure" {
     const source = "var broken = ;";
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     var scanDiagnostics: std.ArrayList(scanner.Diagnostic) = .empty;

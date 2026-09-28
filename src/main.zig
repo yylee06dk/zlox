@@ -6,13 +6,14 @@ const scan = @import("scanner.zig");
 // const values = @import("values.zig");
 const compile = @import("compiler.zig");
 
+const clap = @import("clap");
+
 const Allocator = std.mem.Allocator;
 const print = std.debug.print;
 
-const DebugMode = @import("common.zig").DebugMode;
-const DebugVM = DebugMode and true;
-const DebugChunk = DebugMode and true;
-const DebugGC = DebugMode and true;
+//const DebugVM = DebugMode and true;
+//const DebugChunk = DebugMode and true;
+//const DebugGC = DebugMode and true;
 
 pub const StdInterface = struct {
     stdin: *std.Io.Reader,
@@ -20,8 +21,47 @@ pub const StdInterface = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    const params = comptime clap.parseParamsComptime(
+        \\-h, --help             Display help and exit.
+        \\-d, --debug            Enable all debug output.
+        \\-b, --bytecode         Display bytecode. Also enabled by --debug.
+        \\-v, --vmTrace          Display VM execution traces. Also enabled by --debug.
+        \\-g, --gcState          Display GC state. Also enabled by --debug.
+        \\<str>
+    );
+    var diag = clap.Diagnostic{};
+    var res = clap.parse(clap.Help, &params, clap.parsers.default, init.minimal.args, .{
+        .diagnostic = &diag,
+        .allocator = init.gpa,
+    }) catch |err| {
+        // Report useful error and exit.
+        try diag.reportToFile(init.io, .stderr(), err);
+        return err;
+    };
+    defer res.deinit();
+
+    if (res.args.help != 0) {
+        std.debug.print(
+            \\Usage: zlox [options] [file]
+            \\
+            \\Options:
+            \\  -h, --help      Show this help
+            \\  -d, --debug     Enable all debug output
+            \\  -b, --bytecode  Display bytecode
+            \\  -v, --vmTrace   Trace VM execution
+            \\  -g, --gcState   Display GC state
+            \\
+        , .{});
+        return;
+    }
+    const debugSettings: vm.VM.DebugSettings = .{
+        .all = res.args.debug != 0,
+        .bytecode = res.args.bytecode != 0,
+        .vmTrace = res.args.vmTrace != 0,
+        .gcState = res.args.gcState != 0,
+    };
     // Setting up machine used during the whole main-scope. The VM has the same life time as the main scope
-    var machine = vm.VM.initSettings(DebugMode or DebugVM, init.gpa) catch |err| {
+    var machine = vm.VM.initSettings(debugSettings, init.gpa) catch |err| {
         fatalErrorReport(err);
         return;
     };
@@ -48,15 +88,8 @@ pub fn main(init: std.process.Init) !void {
     };
 
     // Generates unportable code (according to zig std documentation)
-    var argsIterator = init.minimal.args.iterate();
-    _ = argsIterator.skip(); // skip binary name
-
-    if (argsIterator.next()) |filePath| {
-        if (argsIterator.skip()) { // Check for additional arguments
-            print("Usage: <binary> <file_path>\n", .{});
-        }
-
-        runFile(init, filePath, &machine, &stdInterface) catch |err| {
+    if (res.positionals[0]) |s| {
+        runFile(init, s, &machine, &stdInterface) catch |err| {
             fatalErrorReport(err);
         };
         return;
@@ -83,12 +116,15 @@ fn runFile(init: std.process.Init, path: []const u8, machine: *vm.VM, interface:
     defer init.gpa.free(source); // source lives all along this scope --> the whole running process is within its lifetime
     // stdout init
 
-    try interpret(
+    interpret(
         init.gpa,
         source,
         machine,
         interface.stdout,
-    );
+    ) catch |err| switch (err) {
+        error.RuntimeError, error.CompileError => return,
+        else => return err,
+    };
 }
 
 fn runREPL(init: std.process.Init, machine: *vm.VM, interface: *StdInterface) !void {
@@ -143,7 +179,7 @@ pub fn interpret(alloc: Allocator, source: []const u8, machine: *vm.VM, writer: 
         else => return err, // Fatal errors can just be propagated
     } orelse return; // Nothing to compile.
     // Memory controlled by GC
-    if (DebugMode or DebugChunk) {
+    if (machine.debugSettings.bytecodeEnabled()) {
         try writer.print("{f}", .{std.fmt.alt(scriptPtr.*, .formatTotal)});
     }
 
@@ -164,7 +200,7 @@ pub fn interpret(alloc: Allocator, source: []const u8, machine: *vm.VM, writer: 
             else => return err, // Fatal errors can just be propagated
         }
     };
-    if (DebugMode or DebugGC) {
+    if (machine.debugSettings.gcStateEnabled()) {
         try writer.print("==== GC state ====\n{f}\n", .{machine.gcAlloc});
     }
     try writer.flush();

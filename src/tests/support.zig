@@ -5,7 +5,7 @@ const vm = @import("../vm.zig");
 
 pub fn checkOutput(source: []const u8, expected: []const u8) !void {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     var output: std.Io.Writer.Allocating = .init(allocator);
@@ -22,7 +22,7 @@ pub fn checkOutput(source: []const u8, expected: []const u8) !void {
 
 pub fn checkSession(submissions: []const []const u8, expected: []const u8) !void {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     var output: std.Io.Writer.Allocating = .init(allocator);
@@ -43,7 +43,7 @@ pub fn checkSession(submissions: []const []const u8, expected: []const u8) !void
 
 pub fn checkRuntimeError(source: []const u8) !void {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     var output: std.Io.Writer.Allocating = .init(allocator);
@@ -58,7 +58,7 @@ pub fn checkRuntimeError(source: []const u8) !void {
 
 pub fn checkRuntimeRecovery(failingSource: []const u8, nextSource: []const u8, expected: []const u8) !void {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     var output: std.Io.Writer.Allocating = .init(allocator);

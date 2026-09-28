@@ -14,9 +14,28 @@ const Allocator = std.mem.Allocator;
 const maxFrameCount = 64;
 
 pub const VM = struct {
+    pub const DebugSettings = struct {
+        all: bool = false,
+        bytecode: bool = false,
+        vmTrace: bool = false,
+        gcState: bool = false,
+
+        pub fn bytecodeEnabled(self: DebugSettings) bool {
+            return self.all or self.bytecode;
+        }
+
+        pub fn vmTraceEnabled(self: DebugSettings) bool {
+            return self.all or self.vmTrace;
+        }
+
+        pub fn gcStateEnabled(self: DebugSettings) bool {
+            return self.all or self.gcState;
+        }
+    };
+
     frames: []CallFrame,
     frameCount: usize,
-    debugFlag: bool = false,
+    debugSettings: DebugSettings,
     stack: vmStack.Stack,
     stringPool: table.Table,
     globals: table.Table,
@@ -99,11 +118,11 @@ pub const VM = struct {
         basePtr: usize,
     };
 
-    pub fn initSettings(debugFlag: bool, alloc: Allocator) Allocator.Error!VM {
+    pub fn initSettings(debugSettings: DebugSettings, alloc: Allocator) Allocator.Error!VM {
         return .{
             .frames = try alloc.alloc(CallFrame, maxFrameCount),
             .frameCount = 0,
-            .debugFlag = debugFlag,
+            .debugSettings = debugSettings,
             .stack = try vmStack.Stack.init(alloc),
             .stringPool = try table.Table.init(alloc),
             .globals = try table.Table.init(alloc),
@@ -135,19 +154,20 @@ pub const VM = struct {
     }
 
     pub fn execute(self: *VM, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
-        if (self.debugFlag) {
+        const debugVM = self.debugSettings.vmTraceEnabled();
+        if (debugVM) {
             try writer.print("==== VM Execute Trace ====\n", .{});
         }
         while (self.frameCount >= 1 and !self.isAtEnd()) {
             const curCode = self.advance();
             const opCode: bc.opCode = @enumFromInt(curCode);
-            if (self.debugFlag) {
+            if (debugVM) {
                 try writer.print("{f}+{d:0>4} | {s}: ", .{ self.getCurrentFrame().closure.*, self.getCurrentFrame().ip - 1, opCode.toString() });
             }
             switch (opCode) {
                 .ReturnOp => {
                     const retVal = try self.safePop(diagnostics);
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("{f}", .{retVal});
                     }
                     try self.cleanCurrentCall(retVal, diagnostics);
@@ -156,14 +176,14 @@ pub const VM = struct {
                     const valueAddr = self.advance();
                     const value = self.getConst(valueAddr);
                     try self.safePush(value, diagnostics);
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("{f}", .{value});
                     }
                 },
                 .NegateOp => {
                     const value = try self.safePop(diagnostics);
                     if (value.isNum()) {
-                        if (self.debugFlag) {
+                        if (debugVM) {
                             try writer.print("{d} -> {d}", .{ value.asNum(), -value.asNum() });
                         }
                         try self.safePush(values.Value{ .number = -value.asNum() }, diagnostics);
@@ -197,7 +217,7 @@ pub const VM = struct {
                     };
 
                     _ = try self.globals.set(defTarget, value, alloc);
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("{s}: {f}", .{ defTarget.getString(), value });
                     }
                 },
@@ -210,7 +230,7 @@ pub const VM = struct {
                         diagnostics.setContext(self, "Unknown variable used");
                         return Error.RuntimeError;
                     };
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("got {f} from {s}", .{ value, nameObjStr.getString() });
                     }
                     try self.stack.push(value);
@@ -227,7 +247,7 @@ pub const VM = struct {
                     };
                     // Don't check if it's a re-define
                     _ = try self.globals.set(nameObjStr, assignVal, alloc);
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("{s}: {f} -> {f}", .{ nameObjStr.getString(), oldVal, assignVal });
                     }
                 },
@@ -235,7 +255,7 @@ pub const VM = struct {
                 .DefineLocalOp => {
                     const value, const slot, const dump = try self.safeGetLocal(diagnostics);
                     _ = dump;
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("{d:>3}: {f}", .{ slot, value });
                     }
                 },
@@ -243,14 +263,14 @@ pub const VM = struct {
                     const value, const slot, const dump = try self.safeGetLocal(diagnostics);
                     _ = dump;
                     try self.safePush(value, diagnostics);
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("{d:>3}: {f}", .{ slot, value });
                     }
                 },
                 .SetLocalOp => {
                     const oldVal, const slot, const trueAddr = try self.safeGetLocal(diagnostics);
                     const newVal = try self.safePeek(diagnostics, 0);
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("slot:{d:>3} : {f} -> {f}", .{ slot, oldVal, newVal });
                     }
                     self.stack.stackArray[trueAddr] = newVal;
@@ -267,21 +287,21 @@ pub const VM = struct {
                         self.getCurrentFrame().ip += short;
                     }
                     const trueJump = if (!conditionBool) short else 0;
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("condition: {}, jumped {d:>4}", .{ conditionBool, trueJump });
                     }
                 },
                 .JumpOp => {
                     const short = self.advanceShort();
                     self.getCurrentFrame().ip += short;
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("jumped {d:>4}", .{short});
                     }
                 },
                 .LoopOp => {
                     const short = self.advanceShort();
                     self.getCurrentFrame().ip -= short;
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("jumped -{d:>4}", .{short});
                     }
                 },
@@ -306,7 +326,7 @@ pub const VM = struct {
                         diagnostics.setContext(self, "Function call has different arity");
                         return Error.RuntimeError;
                     }
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("{f} in depth {d} with args", .{ closurePtr, self.frameCount });
                         var idx = argCount;
                         while (idx > 0) : (idx -= 1) {
@@ -323,6 +343,7 @@ pub const VM = struct {
                     };
 
                     var closurePtr = try objectStore.createClosure(alloc, &self.gcAlloc, funcPtr);
+                    if (debugVM) try writer.print("\n", .{});
                     for (0..funcPtr.upvalueCount) |idx| {
                         // Capture happens from the perspective of parent-context
                         const upvaluePtr = try self.captureUpvalue(alloc, writer);
@@ -330,46 +351,47 @@ pub const VM = struct {
                     }
 
                     try self.safePush(.{ .closure = closurePtr }, diagnostics);
-                    if (self.debugFlag) try writer.print("Closure Made from {f}", .{funcPtr.*});
+                    if (debugVM) try writer.print("Closure Made from {f}", .{funcPtr.*});
                 },
                 .GetUpvalueOp => {
                     const index = self.advance();
-                    const value = self.getCurrentFrame().closure.upvalueObjs[index].value.*;
-                    try self.safePush(value, diagnostics);
-                    if (self.debugFlag) try writer.print("index: {d}, value: {f}", .{ index, value });
+                    const location = self.getCurrentFrame().closure.upvalueObjs[index].value;
+                    try self.safePush(location.*, diagnostics);
+                    if (debugVM) try writer.print("index: {d}, value: {*}-{f}", .{ index, location, location.* });
                 },
                 .SetUpvalueOp => {
                     const index = self.advance();
                     const newVal = try self.safePeek(diagnostics, 0);
-                    const oldVal = self.getCurrentFrame().closure.upvalueObjs[index].value.*;
-                    if (self.debugFlag) try writer.print("index: {d}, value: {f} -> {f}", .{ index, oldVal, newVal });
+                    const oldValLocation = self.getCurrentFrame().closure.upvalueObjs[index].value;
+                    if (debugVM) try writer.print("index: {d}, value: {*} : {f} -> {f}", .{ index, oldValLocation, oldValLocation.*, newVal });
                     self.getCurrentFrame().closure.upvalueObjs[index].value.* = newVal;
                 },
                 .PopOp => {
                     const value = try self.safePop(diagnostics);
-                    if (self.debugFlag) try writer.print("{f}", .{value});
+                    if (debugVM) try writer.print("{f}", .{value});
                 },
                 .CloseUpvalueOp => {
                     const location = &self.stack.stackArray[self.stack.length - 1];
                     const value = try self.safePop(diagnostics);
-                    if (self.debugFlag) try writer.print("closing {f}", .{value});
+                    if (debugVM) try writer.print("closing {*} -> {f}", .{ location, value });
 
                     try self.closeUpvalue(location, diagnostics);
                 },
                 // else => return Error.CompileErr,
             }
-            if (self.debugFlag and opCode != .PrintOp) {
+            if (debugVM) {
                 try writer.print("\n", .{});
             }
             try writer.flush(); // Needed here to check where the runtimeError actually happened(during execution trace)
 
         }
-        if (self.debugFlag and self.frameCount == 0) {
+        if (debugVM and self.frameCount == 0) {
             try writer.print("==== VM Execute Trace ====\n\n", .{});
         }
     }
 
     fn doBinaryOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, alloc: Allocator, diagnostics: *Diagnostic) !void {
+        const debugVM = self.debugSettings.vmTraceEnabled();
         const operator = switch (opCode) {
             .AddOp => "+",
             .SubOp => "-",
@@ -388,7 +410,7 @@ pub const VM = struct {
                 .DivOp => o.lVal / o.rVal,
                 else => unreachable,
             };
-            if (self.debugFlag) {
+            if (debugVM) {
                 try writer.print("{d} {s} {d} -> {}", .{ o.lVal, operator, o.rVal, result });
             }
             try self.stack.push(values.Value{ .number = result });
@@ -405,7 +427,7 @@ pub const VM = struct {
             const concatString = try std.mem.concat(alloc, u8, &.{ o.lVal, o.rVal });
             defer alloc.free(concatString);
             const strPtr = try objectStore.makeString(concatString, concatString.len, &self.gcAlloc, &self.stringPool, alloc);
-            if (self.debugFlag) {
+            if (debugVM) {
                 try writer.print("{s} {s} {s} -> {s}", .{ o.lVal, operator, o.rVal, strPtr.getString() });
             }
             try self.stack.push(.{ .string = strPtr });
@@ -424,6 +446,7 @@ pub const VM = struct {
     }
 
     fn doEqualOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, diagnostics: *Diagnostic) !void {
+        const debugVM = self.debugSettings.vmTraceEnabled();
         const rVal = try self.safePop(diagnostics);
         const lVal = try self.safePop(diagnostics);
 
@@ -432,7 +455,7 @@ pub const VM = struct {
             .EqOp => {
                 if (std.meta.activeTag(lVal) != std.meta.activeTag(rVal)) { // two values are different type
                     try self.safePush(.{ .boolean = false }, diagnostics);
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("{f} == {f} -> {}", .{ lVal, rVal, false });
                     }
                     return;
@@ -452,7 +475,7 @@ pub const VM = struct {
             .NeqOp => {
                 if (std.meta.activeTag(lVal) != std.meta.activeTag(rVal)) { // two values are different type
                     try self.safePush(.{ .boolean = true }, diagnostics);
-                    if (self.debugFlag) {
+                    if (debugVM) {
                         try writer.print("{f} == {f} -> {}", .{ lVal, rVal, true });
                     }
                     return;
@@ -470,13 +493,14 @@ pub const VM = struct {
             },
             else => unreachable,
         }
-        if (self.debugFlag) {
+        if (debugVM) {
             try writer.print("{f} == {f} -> {}", .{ lVal, rVal, result });
         }
         try self.safePush(.{ .boolean = result }, diagnostics);
     }
 
     fn doCompareOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, diagnostics: *Diagnostic) !void {
+        const debugVM = self.debugSettings.vmTraceEnabled();
         const operator = switch (opCode) {
             .LessOp => "<",
             .GreatOp => ">",
@@ -495,7 +519,7 @@ pub const VM = struct {
                 .GeqOp => o.lVal >= o.rVal,
                 else => unreachable,
             };
-            if (self.debugFlag) {
+            if (debugVM) {
                 try writer.print("{d} {s} {d} -> {}", .{ o.lVal, operator, o.rVal, result });
             }
             try self.safePush(.{ .boolean = result }, diagnostics);
@@ -624,14 +648,15 @@ pub const VM = struct {
     }
 
     fn captureUpvalue(self: *VM, alloc: Allocator, writer: *std.Io.Writer) !*objects.Object.Upvalue {
+        const debugVM = self.debugSettings.vmTraceEnabled();
         const isLocal = self.advance() == 0;
         // slot in stack or idx to upvalue slice
         const locationInfo = self.advance();
 
         const location = if (isLocal) &self.stack.stackArray[self.getCurrentFrame().basePtr + locationInfo] else self.getCurrentFrame().closure.upvalueObjs[locationInfo].value;
-        if (self.debugFlag) {
+        if (debugVM) {
             const temp = if (isLocal) "local" else "upvalue";
-            print("Debug: {*}\n", .{location});
+            //print("Debug: {*}\n", .{location});
             try writer.print("capturing {s} at {d}: {*} -> {f}\n", .{ temp, locationInfo, location, location.* });
         }
         if (isLocal) {
@@ -700,6 +725,7 @@ pub const VM = struct {
                 c.next = null;
                 c.closed = location.*;
                 c.value = &c.closed;
+                return;
             } else if (@intFromPtr(c.value) < @intFromPtr(location)) {
                 break; // Since openUpvalues are ordered in stack-order, we know we don't need to check more
             }

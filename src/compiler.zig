@@ -7,7 +7,6 @@ const objects = @import("objects.zig");
 const objectStore = @import("objectStore.zig");
 const memory = @import("memory.zig");
 const vm = @import("vm.zig");
-const common = @import("common.zig");
 
 const Allocator = std.mem.Allocator;
 const Errors = Allocator.Error || Compiler.Error || std.Io.Writer.Error;
@@ -154,10 +153,10 @@ pub const Compiler = struct {
             },
             .Function => {
                 try self.blockStatement(alloc, diagnostic, writer);
-                // Implicit nil return
-                try self.writeBytes(alloc, @intFromEnum(bc.opCode.NilOp), @intFromEnum(bc.opCode.ReturnOp));
             },
         }
+        // Implicit nil return for both script and function
+        try self.writeBytes(alloc, @intFromEnum(bc.opCode.NilOp), @intFromEnum(bc.opCode.ReturnOp));
         // The ownership goes to the caller
         const funcPtr = try objectStore.createEmptyFunction(alloc, &self.targetVM.gcAlloc);
         const chunk = try self.output.toOwnedChunk(alloc);
@@ -377,7 +376,7 @@ pub const Compiler = struct {
         try compiler.consume(tokens.TokenType.LeftBrace, self.previous, diagnostic, "Expect opening braces after");
         const funcPtr = try compiler.compileOwnedFunctionObj(alloc, diagnostic, writer) orelse return; // Nothing to compile.
         // Done parsing the function
-        if (common.DebugMode) {
+        if (self.targetVM.debugSettings.bytecodeEnabled()) {
             try writer.print("{f}", .{std.fmt.alt(funcPtr.*, .formatTotal)});
         }
 

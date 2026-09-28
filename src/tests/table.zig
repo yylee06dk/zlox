@@ -27,7 +27,7 @@ test "table boundary: initialization creates only empty slots" {
 
 test "table boundary: set and get preserve a value" {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     const key = try intern(&machine, "answer", allocator);
@@ -38,7 +38,7 @@ test "table boundary: set and get preserve a value" {
 
 test "table regression: replacing a key changes its value without changing count" {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     const key = try intern(&machine, "same", allocator);
@@ -52,7 +52,7 @@ test "table regression: replacing a key changes its value without changing count
 
 test "table regression: growth preserves every entry and does not retain a freed array" {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     const names = [_][]const u8{
@@ -78,7 +78,7 @@ test "table regression: growth preserves every entry and does not retain a freed
 
 test "table regression: string interning remains canonical across growth" {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     const names = [_][]const u8{

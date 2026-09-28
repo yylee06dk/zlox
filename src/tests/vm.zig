@@ -35,7 +35,7 @@ fn installScript(machine: *vm.VM, code: []const u8, constants: []const values.Va
 
 fn executeChunk(code: []const u8, constants: []const values.Value, expected: []const u8) !void {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     const function = try installScript(&machine, code, constants, allocator);
@@ -73,7 +73,7 @@ test "VM boundary: AddOp consumes two operands and produces one result" {
 
 test "VM boundary regression: printing a trailing-allocation string uses its original pointer" {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     const string = try objectStore.makeString(
@@ -103,7 +103,7 @@ test "VM boundary regression: printing a trailing-allocation string uses its ori
 
 test "VM boundary: invalid operand types return a runtime diagnostic" {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(false, allocator);
+    var machine = try vm.VM.initSettings(.{}, allocator);
     defer machine.deinit(allocator);
 
     const function = try installScript(

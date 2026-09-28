@@ -1,1 +1,1 @@
-pub const DebugMode = false;
+pub const DebugMode = true;

@@ -85,6 +85,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    const clap = b.dependency("clap", .{});
+    exe.root_module.addImport("clap", clap.module("clap"));
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
@@ -106,6 +108,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    llvm_exe.root_module.addImport("clap", clap.module("clap"));
     const llvm_step = b.step("llvm", "Build with LLVM for debugging");
     llvm_step.dependOn(&b.addInstallArtifact(llvm_exe, .{}).step);
 
@@ -124,6 +127,13 @@ pub fn build(b: *std.Build) void {
     // the user runs `zig build run`, so we create a dependency link.
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
+
+    const run_debug_step = b.step("run-debug", "Run the app with debug mode");
+    const run_debug_cmd = b.addRunArtifact(exe);
+    run_debug_cmd.addArg("-d");
+    run_debug_cmd.addArg("0");
+    run_debug_cmd.step.dependOn(b.getInstallStep());
+    run_debug_step.dependOn(&run_debug_cmd.step);
 
     // By making the run step depend on the default step, it will be run from the
     // installation directory rather than directly from within the cache directory.
