@@ -36,7 +36,7 @@ pub const Chunk = struct {
 
         try writer.print("{d:0>4} | {d:>4} : {s}\n", .{ ip, curLine, curCode.toString() });
         switch (curCode) {
-            .ReturnOp, .NegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .EqOp, .NeqOp, .LessOp, .GreatOp, .LeqOp, .GeqOp, .PrintOp, .PopOp, .NilOp, .CloseUpvalueOp => {
+            .ReturnOp, .NegateOp, .LogicalNegateOp, .AddOp, .SubOp, .MultOp, .DivOp, .EqOp, .NeqOp, .LessOp, .GreatOp, .LeqOp, .GeqOp, .PrintOp, .PopOp, .NilOp, .CloseUpvalueOp => {
                 return 1;
             },
             .ConstantOp, .DefineGlobalOp, .GetGlobalOp, .SetGlobalOp => {

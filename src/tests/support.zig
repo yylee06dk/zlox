@@ -20,26 +20,6 @@ pub fn checkOutput(source: []const u8, expected: []const u8) !void {
     try expectCleanExecution(&machine);
 }
 
-pub fn checkSession(submissions: []const []const u8, expected: []const u8) !void {
-    const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(.{}, allocator);
-    defer machine.deinit(allocator);
-
-    var output: std.Io.Writer.Allocating = .init(allocator);
-    defer output.deinit();
-
-    std.debug.print("    session submissions:\n", .{});
-    for (submissions, 0..) |source, index| {
-        std.debug.print("      {d}: {s}\n", .{ index + 1, source });
-        try app.interpret(allocator, source, &machine, &output.writer);
-        try expectCleanExecution(&machine);
-    }
-
-    const actual = output.writer.buffered();
-    std.debug.print("    expected output:\n{s}", .{expected});
-    std.debug.print("    actual output:\n{s}", .{actual});
-    try std.testing.expectEqualStrings(expected, actual);
-}
 
 pub fn checkRuntimeError(source: []const u8) !void {
     const allocator = std.testing.allocator;

@@ -2,7 +2,10 @@
 // specific files under src/tests/.
 test "load boundary test suites" {
     _ = @import("tests/end_to_end.zig");
+    _ = @import("tests/session.zig");
     _ = @import("tests/table.zig");
+    // Keep known failures last so the rest of the suite still runs first.
+    //_ = @import("tests/known_issues.zig");
 }
 
 // Keep implementation-local test blocks reachable from the central test root.

@@ -187,10 +187,22 @@ pub const VM = struct {
                             try writer.print("{d} -> {d}", .{ value.asNum(), -value.asNum() });
                         }
                         try self.safePush(values.Value{ .number = -value.asNum() }, diagnostics);
-                        continue;
+                    } else {
+                        diagnostics.setContext(self, "negate operation can only have number operand");
+                        return Error.RuntimeError;
                     }
-                    diagnostics.setContext(self, "negate operation can only have number operands");
-                    return Error.RuntimeError;
+                },
+                .LogicalNegateOp => {
+                    const value = try self.safePop(diagnostics);
+                    if (value.isBool()) {
+                        if (debugVM) {
+                            try writer.print("{} -> {}", .{ value.asBool(), !value.asBool() });
+                        }
+                        try self.safePush(values.Value{ .boolean = !value.asBool() }, diagnostics);
+                    } else {
+                        diagnostics.setContext(self, "logic-negate operation can only have boolean operand");
+                        return Error.RuntimeError;
+                    }
                 },
                 .AddOp, .SubOp, .MultOp, .DivOp => {
                     try self.doBinaryOp(opCode, writer, alloc, diagnostics);
@@ -313,10 +325,7 @@ pub const VM = struct {
                         return Error.RuntimeError;
                     };
 
-                    self.frames[self.frameCount] = .{ .closure = closurePtr, .ip = 0, .basePtr = basePtr };
-                    self.frameCount += 1;
-
-                    if (self.frameCount == maxFrameCount) {
+                    if (self.frameCount + 1 >= maxFrameCount) {
                         diagnostics.setContext(self, "Stack Overflow");
                         return Error.RuntimeError;
                     }
@@ -326,6 +335,10 @@ pub const VM = struct {
                         diagnostics.setContext(self, "Function call has different arity");
                         return Error.RuntimeError;
                     }
+
+                    self.frames[self.frameCount] = .{ .closure = closurePtr, .ip = 0, .basePtr = basePtr };
+                    self.frameCount += 1;
+
                     if (debugVM) {
                         try writer.print("{f} in depth {d} with args", .{ closurePtr, self.frameCount });
                         var idx = argCount;
@@ -379,7 +392,7 @@ pub const VM = struct {
                 },
                 // else => return Error.CompileErr,
             }
-            if (debugVM) {
+            if (debugVM and curCode != @intFromEnum(bc.opCode.PrintOp)) {
                 try writer.print("\n", .{});
             }
             try writer.flush(); // Needed here to check where the runtimeError actually happened(during execution trace)

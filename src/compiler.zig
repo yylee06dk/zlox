@@ -45,6 +45,9 @@ const ruleTable: std.enums.EnumArray(tokens.TokenType, Rule) = .initDefault(.{},
     .Minus = .{ .prefix = Compiler.unary, .infix = Compiler.binary, .prec = .Term },
     .Star = .{ .infix = Compiler.binary, .prec = .Factor },
     .Slash = .{ .infix = Compiler.binary, .prec = .Factor },
+    .Bang = .{
+        .prefix = Compiler.unary,
+    },
     .EqualEquals = .{ .infix = Compiler.binary, .prec = .Equality },
     .BangEquals = .{ .infix = Compiler.binary, .prec = .Equality },
     .Greater = .{ .infix = Compiler.binary, .prec = .Comparison },
@@ -669,6 +672,7 @@ pub const Compiler = struct {
 
         switch (opTokenType) {
             .Minus => try self.writeByte(alloc, @intFromEnum(bc.opCode.NegateOp)),
+            .Bang => try self.writeByte(alloc, @intFromEnum(bc.opCode.LogicalNegateOp)),
             else => unreachable,
         }
     }
