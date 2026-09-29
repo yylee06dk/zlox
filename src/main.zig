@@ -27,6 +27,7 @@ pub fn main(init: std.process.Init) !void {
         \\-b, --bytecode         Display bytecode. Also enabled by --debug.
         \\-v, --vmTrace          Display VM execution traces. Also enabled by --debug.
         \\-g, --gcState          Display GC state. Also enabled by --debug.
+        \\-s, --stressGC         Stress GC to run after every allocation. Not enabled in --debug
         \\<str>
     );
     var diag = clap.Diagnostic{};
@@ -50,6 +51,7 @@ pub fn main(init: std.process.Init) !void {
             \\  -b, --bytecode  Display bytecode
             \\  -v, --vmTrace   Trace VM execution
             \\  -g, --gcState   Display GC state
+            \\  -s, --stressGC  GC boots every time allocation happens
             \\
         , .{});
         return;
@@ -59,6 +61,7 @@ pub fn main(init: std.process.Init) !void {
         .bytecode = res.args.bytecode != 0,
         .vmTrace = res.args.vmTrace != 0,
         .gcState = res.args.gcState != 0,
+        .stressGC = res.args.stressGC != 0,
     };
     // Setting up machine used during the whole main-scope. The VM has the same life time as the main scope
     var machine = vm.VM.initSettings(debugSettings, init.gpa) catch |err| {

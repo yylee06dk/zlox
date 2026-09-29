@@ -1,5 +1,8 @@
 const std = @import("std");
-const objects = @import("objects.zig");
+const _String = @import("object/string.zig").String;
+const _Function = @import("object/function.zig").Function;
+const _Closure = @import("object/closure.zig").Closure;
+const _Upvalue = @import("object/upvalue.zig").Upvalue;
 
 pub const valueType = enum {
     number,
@@ -15,10 +18,15 @@ pub const Value = union(valueType) {
     number: f64,
     boolean: bool,
     nil: u1,
-    string: *objects.Object.String,
-    function: *objects.Object.Function,
-    closure: *objects.Object.Closure,
-    upvalue: *objects.Object.Upvalue,
+    string: *String,
+    function: *Function,
+    closure: *Closure,
+    upvalue: *Upvalue,
+
+    pub const String = _String;
+    pub const Function = _Function;
+    pub const Closure = _Closure;
+    pub const Upvalue = _Upvalue;
 
     pub fn isNum(self: Value) bool {
         return switch (self) {
@@ -84,28 +92,28 @@ pub const Value = union(valueType) {
         return self.boolean;
     }
 
-    pub fn asString(self: Value) ?*objects.Object.String {
+    pub fn asString(self: Value) ?*String {
         return switch (self) {
             .string => |string| string,
             else => null,
         };
     }
 
-    pub fn asFunction(self: Value) ?*objects.Object.Function {
+    pub fn asFunction(self: Value) ?*Function {
         return switch (self) {
             .function => |function| function,
             else => null,
         };
     }
 
-    pub fn asClosure(self: Value) ?*objects.Object.Closure {
+    pub fn asClosure(self: Value) ?*Closure {
         return switch (self) {
             .closure => |closure| closure,
             else => null,
         };
     }
 
-    pub fn asUpvalue(self: Value) ?*objects.Object.Upvalue {
+    pub fn asUpvalue(self: Value) ?*Upvalue {
         return switch (self) {
             .upvalue => |upvalue| upvalue,
             else => null,

@@ -1,12 +1,14 @@
 const std = @import("std");
 const bci = @import("../bytecodeInfo.zig");
+const GC = @import("../memory.zig").GarbageCollector;
 const String = @import("string.zig").String;
 const Function = @import("function.zig").Function;
 const Upvalue = @import("upvalue.zig").Upvalue;
 
 pub const Closure = struct {
-    baseFunction: *Function,
-    upvalueObjs: []*Upvalue,
+    gcHeader: GC.GCHeader = undefined,
+    baseFunction: *Function = undefined,
+    upvalueObjs: []*Upvalue = undefined,
 
     fn getName(self: *const Closure) []const u8 {
         if (self.baseFunction.name) |name| {

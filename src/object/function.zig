@@ -1,8 +1,10 @@
 const std = @import("std");
 const bci = @import("../bytecodeInfo.zig");
+const GC = @import("../memory.zig").GarbageCollector;
 const String = @import("string.zig").String;
 
 pub const Function = struct {
+    gcHeader: GC.GCHeader = undefined,
     chunk: bci.Chunk = undefined,
     name: ?*const String = undefined,
     upvalueCount: u8 = undefined,

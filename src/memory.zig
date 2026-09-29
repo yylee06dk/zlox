@@ -1,21 +1,39 @@
 const std = @import("std");
-const objects = @import("objects.zig");
+const Value = @import("values.zig").Value;
 const Allocator = std.mem.Allocator;
 
-pub const GCAllocator = struct {
+pub const GarbageCollector = struct {
     allocationList: std.ArrayList(Allocation) = .empty,
+    greyStack: std.ArrayList(*GCHeader) = .empty,
     curAllocSize: usize = 0,
 
+    pub const GCHeader = struct {
+        kind: ObjKind,
+        isMarked: bool = false,
+
+        pub const ObjKind = enum {
+            String,
+            Function,
+            Closure,
+            Upvalue,
+        };
+    };
+
+    fn objectFromHeader(comptime T: type, header: *GCHeader) *T {
+        return @alignCast(@fieldParentPtr("gcHeader", header));
+    }
+
     const Allocation = struct {
-        payload: objects.Object,
+        payload: *GCHeader,
         size: usize,
     };
 
-    pub fn deinit(self: *GCAllocator, alloc: Allocator) void {
+    pub fn deinit(self: *GarbageCollector, alloc: Allocator) void {
         self.allocationList.deinit(alloc);
+        self.greyStack.deinit(alloc);
     }
 
-    pub fn addAllocation(self: *GCAllocator, item: objects.Object, sizeChange: usize, alloc: Allocator) Allocator.Error!void {
+    pub fn addAllocation(self: *GarbageCollector, item: *GCHeader, sizeChange: usize, alloc: Allocator) Allocator.Error!void {
         if (!self.contains(item)) {
             try self.allocationList.append(alloc, .{ .payload = item, .size = sizeChange });
         }
@@ -23,42 +41,51 @@ pub const GCAllocator = struct {
         // Later on check if it got over the limit
     }
 
-    pub fn freeAll(self: *GCAllocator, alloc: Allocator) void {
+    pub fn freeAll(self: *GarbageCollector, alloc: Allocator) void {
         for (self.allocationList.items) |item| {
-            const allocation = item.payload;
+            const header = item.payload;
             const size = item.size;
-            switch (allocation) {
-                .string => |s| {
-                    const objAsBytes: [*]u8 = @ptrCast(s);
-                    const totalObject: []u8 = objAsBytes[0..size];
-                    // This cast is safe since every object comes from alignedAlloc
-                    const totalObjectWithAlign = @as([]align(@alignOf(objects.Object.String)) u8, @alignCast(totalObject));
-                    alloc.free(totalObjectWithAlign);
-                },
-                .function => |f| {
-                    f.chunk.deinit(alloc);
-                    alloc.destroy(f);
-                },
-                .closure => |c| {
-                    alloc.free(c.upvalueObjs);
-                    alloc.destroy(c);
-                },
-                .upvalue => |u| {
-                    alloc.destroy(u);
-                },
-            }
+            self.freeObjectFromHeader(header, size, alloc);
         }
 
         self.allocationList.clearRetainingCapacity();
         self.curAllocSize = 0;
     }
 
-    fn contains(self: *GCAllocator, item: objects.Object) bool {
+    fn freeObjectFromHeader(self: *GarbageCollector, header: *GCHeader, size: usize, alloc: Allocator) void {
+        switch (header.kind) {
+            .String => {
+                const strPtr = objectFromHeader(Value.String, header);
+                const objAsBytes: [*]u8 = @ptrCast(strPtr);
+                const totalObject: []u8 = objAsBytes[0..size];
+                // This cast is safe since every object comes from alignedAlloc
+                const totalStringWithAlign = @as([]align(@alignOf(Value.String)) u8, @alignCast(totalObject));
+                alloc.free(totalStringWithAlign);
+                self.curAllocSize -= size;
+            },
+            .Function => {
+                const funcPtr = objectFromHeader(Value.Function, header);
+                funcPtr.chunk.deinit(alloc);
+                alloc.destroy(funcPtr);
+                self.curAllocSize -= size;
+            },
+            .Closure => {
+                const closurePtr = objectFromHeader(Value.Closure, header);
+                alloc.free(closurePtr.upvalueObjs);
+                alloc.destroy(closurePtr);
+                self.curAllocSize -= size;
+            },
+            .Upvalue => {
+                const upvaluePtr = objectFromHeader(Value.Upvalue, header);
+                alloc.destroy(upvaluePtr);
+                self.curAllocSize -= size;
+            },
+        }
+    }
+
+    fn contains(self: *GarbageCollector, targetHeader: *GCHeader) bool {
         for (self.allocationList.items) |v| {
-            const allocation = v.payload;
-            if (allocation.getPointer() == item.getPointer()) {
-                return true;
-            }
+            if (v.payload == targetHeader) return true;
         }
         return false;
     }
@@ -69,20 +96,24 @@ pub const GCAllocator = struct {
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
         for (self.allocationList.items) |item| {
-            const allocation = item.payload;
+            const header = item.payload;
             const size = item.size;
-            switch (allocation) {
-                .string => |s| {
-                    try writer.print("String: {s} | size: {d}\n", .{ s.getString(), size });
+            switch (header.kind) {
+                .String => {
+                    const strPtr = objectFromHeader(Value.String, header);
+                    try writer.print("String: {s} | size: {d}\n", .{ strPtr.getString(), size });
                 },
-                .function => |f| {
-                    try writer.print("Function: {f} | size: {d}\n", .{ f.*, size });
+                .Function => {
+                    const funcPtr = objectFromHeader(Value.Function, header);
+                    try writer.print("Function: {f} | size: {d}\n", .{ funcPtr.*, size });
                 },
-                .closure => |c| {
-                    try writer.print("Closure: {f} | size: {d}\n", .{ c.*, size });
+                .Closure => {
+                    const closurePtr = objectFromHeader(Value.Closure, header);
+                    try writer.print("Closure: {f} | size: {d}\n", .{ closurePtr.*, size });
                 },
-                .upvalue => |u| {
-                    try writer.print("Upvalue: {f} | size: {d}\n", .{ u.*, size });
+                .Upvalue => {
+                    const upvaluePtr = objectFromHeader(Value.Upvalue, header);
+                    try writer.print("Upvalue: {f} | size: {d}\n", .{ upvaluePtr.*, size });
                 },
             }
         }

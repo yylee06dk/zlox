@@ -1,10 +1,12 @@
 const std = @import("std");
 const values = @import("../values.zig");
+const GC = @import("../memory.zig").GarbageCollector;
 
 pub const Upvalue = struct {
-    value: *values.Value,
-    closed: values.Value,
-    next: ?*Upvalue = null,
+    gcHeader: GC.GCHeader = undefined,
+    value: *values.Value = undefined,
+    closed: values.Value = undefined,
+    next: ?*Upvalue = undefined,
 
     pub fn format(
         self: @This(),

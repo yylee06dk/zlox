@@ -2,8 +2,7 @@ const std = @import("std");
 const tokens = @import("tokens.zig");
 const bc = @import("bytecode.zig");
 const bcInfo = @import("bytecodeInfo.zig");
-const values = @import("values.zig");
-const objects = @import("objects.zig");
+const Value = @import("values.zig").Value;
 const objectStore = @import("objectStore.zig");
 const memory = @import("memory.zig");
 const vm = @import("vm.zig");
@@ -78,7 +77,7 @@ pub const Compiler = struct {
     targetVM: *vm.VM, // We write info needed at runtime that's resolved at compile time
     compileType: CompileType,
     arity: u8,
-    name: ?*const objects.Object.String, //borrowed
+    name: ?*const Value.String, //borrowed
     enclosing: ?*Compiler,
     upvalues: *[maxUpvalueCount]Upvalue,
     upvalueCount: u8,
@@ -112,7 +111,7 @@ pub const Compiler = struct {
         isLocal: bool,
     };
 
-    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, compileType: CompileType, arity: u8, name: ?*const objects.Object.String, enclosing: ?*Compiler, alloc: Allocator) !Compiler {
+    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, compileType: CompileType, arity: u8, name: ?*const Value.String, enclosing: ?*Compiler, alloc: Allocator) !Compiler {
         var temp: Compiler = .{
             .source = source,
             .tokenList = tokenList,
@@ -140,7 +139,7 @@ pub const Compiler = struct {
         alloc.free(@as([]Upvalue, @ptrCast(self.upvalues)));
     }
 
-    pub fn compileOwnedFunctionObj(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) !?*objects.Object.Function {
+    pub fn compileOwnedFunctionObj(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, writer: *std.Io.Writer) !?*Value.Function {
         errdefer self.output.deinit(alloc);
         // This is double checked since scanner might ignore values
         // This means the input line was not empty so we scanned it, but then it came out empty since it only had errorful contents
@@ -173,7 +172,7 @@ pub const Compiler = struct {
         locals: []Local, // of length 256 (MAX_U8)
 
         const Local = struct {
-            name: *const objects.Object.String,
+            name: *const Value.String,
             depth: usize,
             isCaptured: bool,
         };
@@ -218,7 +217,7 @@ pub const Compiler = struct {
         self.resolver.scopeDepth -= 1;
     }
 
-    pub fn declareVariable(self: *Compiler, name: *objects.Object.String, diagnostic: *Diagnostic) !void {
+    pub fn declareVariable(self: *Compiler, name: *Value.String, diagnostic: *Diagnostic) !void {
         if (self.resolver.localCount == std.math.maxInt(u8) + 1) {
             diagnostic.setContext(self.previous, "Too many local variables declared(max of 256) at");
             return Error.ParseFailed;
@@ -243,7 +242,7 @@ pub const Compiler = struct {
         self.resolver.localCount += 1;
     }
 
-    fn resolveLocal(self: *Compiler, name: *objects.Object.String) ?u8 {
+    fn resolveLocal(self: *Compiler, name: *Value.String) ?u8 {
         var idx = self.resolver.localCount;
         // Search for the given name in locals list
         while (idx > 0) { // start from end to meet the innermost declaration(shadowing)
@@ -256,7 +255,7 @@ pub const Compiler = struct {
         return null;
     }
 
-    fn resolveUpvalue(self: *Compiler, name: *objects.Object.String) ?u8 {
+    fn resolveUpvalue(self: *Compiler, name: *Value.String) ?u8 {
         if (self.enclosing == null) return null;
         const current = if (self.enclosing) |v| v else unreachable;
         const slotLocal = current.resolveLocal(name);
@@ -583,15 +582,15 @@ pub const Compiler = struct {
         _ = diagnostic;
         switch (self.previous.kind) {
             .True => {
-                const value = values.Value{ .boolean = true };
+                const value = Value{ .boolean = true };
                 try self.writeConstant(alloc, value);
             },
             .False => {
-                const value = values.Value{ .boolean = false };
+                const value = Value{ .boolean = false };
                 try self.writeConstant(alloc, value);
             },
             .Nil => {
-                const value = values.Value{ .nil = 1 };
+                const value = Value{ .nil = 1 };
                 try self.writeConstant(alloc, value);
             },
             else => unreachable,
@@ -618,7 +617,7 @@ pub const Compiler = struct {
         _ = diagnostic;
         const lexeme = self.previous.getLexeme(self.source);
         const num = std.fmt.parseFloat(f64, lexeme) catch unreachable;
-        const value = values.Value{ .number = num };
+        const value = Value{ .number = num };
         try self.writeConstant(alloc, value);
     }
 
@@ -626,7 +625,7 @@ pub const Compiler = struct {
         _ = canAssign;
         _ = diagnostic;
         const strPtr = try objectStore.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
-        const value: values.Value = .{ .string = strPtr };
+        const value: Value = .{ .string = strPtr };
         try self.writeConstant(alloc, value);
     }
 
@@ -737,7 +736,7 @@ pub const Compiler = struct {
     // Basic functions end
 
     // Basic functions to write to the output field
-    fn writeConstant(self: *Compiler, alloc: Allocator, value: values.Value) Allocator.Error!void {
+    fn writeConstant(self: *Compiler, alloc: Allocator, value: Value) Allocator.Error!void {
         // Only causes Oom error
         const addr = try self.output.addConstant(alloc, value);
         if (addr > std.math.maxInt(u8)) {
@@ -781,7 +780,7 @@ pub const Compiler = struct {
     }
 
     // Variable parsing related functions
-    fn parseNamedVariable(self: *Compiler, nameToken: *tokens.Token, isDeclaration: bool, alloc: Allocator, diagnostic: *Diagnostic) !struct { *objects.Object.String, usize } {
+    fn parseNamedVariable(self: *Compiler, nameToken: *tokens.Token, isDeclaration: bool, alloc: Allocator, diagnostic: *Diagnostic) !struct { *Value.String, usize } {
         const nameString = try objectStore.makeString(self.source[nameToken.start..], nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
         // Add the variable name to constant list
         const addr = try self.output.addConstant(alloc, .{ .string = nameString });

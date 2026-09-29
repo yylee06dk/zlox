@@ -2,9 +2,8 @@ const std = @import("std");
 const bc = @import("bytecode.zig");
 const bcInfo = @import("bytecodeInfo.zig");
 const vmStack = @import("vmStack.zig");
-const values = @import("values.zig");
+const Value = @import("values.zig").Value;
 const memory = @import("memory.zig");
-const objects = @import("objects.zig");
 const objectStore = @import("objectStore.zig");
 const table = @import("table.zig");
 
@@ -19,6 +18,7 @@ pub const VM = struct {
         bytecode: bool = false,
         vmTrace: bool = false,
         gcState: bool = false,
+        stressGC: bool = false,
 
         pub fn bytecodeEnabled(self: DebugSettings) bool {
             return self.all or self.bytecode;
@@ -31,6 +31,10 @@ pub const VM = struct {
         pub fn gcStateEnabled(self: DebugSettings) bool {
             return self.all or self.gcState;
         }
+
+        pub fn stressGCEnabled(self: DebugSettings) bool {
+            return self.stressGC;
+        }
     };
 
     frames: []CallFrame,
@@ -39,14 +43,14 @@ pub const VM = struct {
     stack: vmStack.Stack,
     stringPool: table.Table,
     globals: table.Table,
-    gcAlloc: memory.GCAllocator = .{},
-    openUpvalues: ?*objects.Object.Upvalue,
+    gcAlloc: memory.GarbageCollector = .{},
+    openUpvalues: ?*Value.Upvalue,
 
     fn getCurrentFrame(self: *const VM) *CallFrame {
         return &self.frames[self.frameCount - 1];
     }
 
-    fn getConst(self: *const VM, addr: usize) values.Value {
+    fn getConst(self: *const VM, addr: usize) Value {
         return self.getCurrentFrame().closure.baseFunction.chunk.constantSlice[addr];
     }
 
@@ -113,7 +117,7 @@ pub const VM = struct {
     };
 
     const CallFrame = struct {
-        closure: *const objects.Object.Closure,
+        closure: *const Value.Closure,
         ip: usize,
         basePtr: usize,
     };
@@ -139,7 +143,7 @@ pub const VM = struct {
         alloc.free(self.frames);
     }
 
-    pub fn setTargetFunction(self: *VM, targetFunc: *objects.Object.Function, alloc: Allocator) !void {
+    pub fn setTargetFunction(self: *VM, targetFunc: *Value.Function, alloc: Allocator) !void {
         // For the repl session, stack needs to be reset
         self.cleanAll();
 
@@ -186,7 +190,7 @@ pub const VM = struct {
                         if (debugVM) {
                             try writer.print("{d} -> {d}", .{ value.asNum(), -value.asNum() });
                         }
-                        try self.safePush(values.Value{ .number = -value.asNum() }, diagnostics);
+                        try self.safePush(Value{ .number = -value.asNum() }, diagnostics);
                     } else {
                         diagnostics.setContext(self, "negate operation can only have number operand");
                         return Error.RuntimeError;
@@ -198,7 +202,7 @@ pub const VM = struct {
                         if (debugVM) {
                             try writer.print("{} -> {}", .{ value.asBool(), !value.asBool() });
                         }
-                        try self.safePush(values.Value{ .boolean = !value.asBool() }, diagnostics);
+                        try self.safePush(Value{ .boolean = !value.asBool() }, diagnostics);
                     } else {
                         diagnostics.setContext(self, "logic-negate operation can only have boolean operand");
                         return Error.RuntimeError;
@@ -218,7 +222,7 @@ pub const VM = struct {
                     try writer.print("{f}\n", .{std.fmt.alt(value, .formatDisplay)});
                 },
                 .NilOp => {
-                    try self.safePush(values.Value{ .nil = 1 }, diagnostics);
+                    try self.safePush(Value{ .nil = 1 }, diagnostics);
                 },
                 .DefineGlobalOp => {
                     const value = try self.safePop(diagnostics);
@@ -426,7 +430,7 @@ pub const VM = struct {
             if (debugVM) {
                 try writer.print("{d} {s} {d} -> {}", .{ o.lVal, operator, o.rVal, result });
             }
-            try self.stack.push(values.Value{ .number = result });
+            try self.stack.push(Value{ .number = result });
             return;
         }
 
@@ -608,14 +612,14 @@ pub const VM = struct {
         return offset;
     }
 
-    fn safePush(self: *VM, item: values.Value, diagnostic: *Diagnostic) !void {
+    fn safePush(self: *VM, item: Value, diagnostic: *Diagnostic) !void {
         self.stack.push(item) catch |err| {
             diagnostic.setContext(self, "Stack Overflow");
             return err;
         };
     }
 
-    fn safePop(self: *VM, diagnostic: *Diagnostic) !values.Value {
+    fn safePop(self: *VM, diagnostic: *Diagnostic) !Value {
         const value = self.stack.pop() orelse {
             diagnostic.setContext(self, "Expected value in stack");
             return Error.CompileError;
@@ -623,7 +627,7 @@ pub const VM = struct {
         return value;
     }
 
-    fn safePeek(self: *VM, diagnostic: *Diagnostic, depth: usize) !values.Value {
+    fn safePeek(self: *VM, diagnostic: *Diagnostic, depth: usize) !Value {
         const value = self.stack.peek(depth) orelse {
             diagnostic.setContext(self, "Expected value in stack");
             return Error.CompileError;
@@ -631,7 +635,7 @@ pub const VM = struct {
         return value;
     }
 
-    fn safeGetLocal(self: *VM, diagnostic: *Diagnostic) !struct { values.Value, u8, usize } {
+    fn safeGetLocal(self: *VM, diagnostic: *Diagnostic) !struct { Value, u8, usize } {
         const slot = self.advance();
         const trueAddr = self.getCurrentFrame().basePtr + slot;
         if (trueAddr >= self.stack.length) {
@@ -643,13 +647,13 @@ pub const VM = struct {
         return .{ value, slot, trueAddr };
     }
 
-    fn cleanCurrentCall(self: *VM, returnVal: ?values.Value, diagnostic: *Diagnostic) !void {
+    fn cleanCurrentCall(self: *VM, returnVal: ?Value, diagnostic: *Diagnostic) !void {
         std.debug.assert(self.frameCount != 0);
         const startLocation = &self.stack.stackArray[self.getCurrentFrame().basePtr];
         try self.closeUpvaluesAfter(startLocation, diagnostic);
         self.frameCount -= 1;
         self.stack.length = self.frames[self.frameCount].basePtr;
-        const retVal: values.Value = if (returnVal) |v| v else .{ .nil = 1 };
+        const retVal: Value = if (returnVal) |v| v else .{ .nil = 1 };
         if (self.frameCount > 0) {
             try self.safePush(retVal, diagnostic);
         }
@@ -660,7 +664,7 @@ pub const VM = struct {
         self.stack.clear();
     }
 
-    fn captureUpvalue(self: *VM, alloc: Allocator, writer: *std.Io.Writer) !*objects.Object.Upvalue {
+    fn captureUpvalue(self: *VM, alloc: Allocator, writer: *std.Io.Writer) !*Value.Upvalue {
         const debugVM = self.debugSettings.vmTraceEnabled();
         const isLocal = self.advance() == 0;
         // slot in stack or idx to upvalue slice
@@ -685,7 +689,7 @@ pub const VM = struct {
         return upvaluePtr;
     }
 
-    fn hasOpenUpvalue(self: *VM, location: *values.Value) ?*objects.Object.Upvalue {
+    fn hasOpenUpvalue(self: *VM, location: *Value) ?*Value.Upvalue {
         var cur = self.openUpvalues;
         while (cur != null) {
             const c = cur orelse break;
@@ -698,7 +702,7 @@ pub const VM = struct {
         return null;
     }
 
-    fn insertOpenUpvalue(self: *VM, upvaluePtr: *objects.Object.Upvalue) void {
+    fn insertOpenUpvalue(self: *VM, upvaluePtr: *Value.Upvalue) void {
         var prev = self.openUpvalues orelse {
             self.openUpvalues = upvaluePtr;
             return;
@@ -721,7 +725,7 @@ pub const VM = struct {
         }
     }
 
-    fn closeUpvalue(self: *VM, location: *values.Value, diagnostic: *Diagnostic) !void {
+    fn closeUpvalue(self: *VM, location: *Value, diagnostic: *Diagnostic) !void {
         var prev = self.openUpvalues orelse {
             diagnostic.setContext(self, "No upvalues to be closed. Maybe the \"isCaptured\" field is corrupted");
             return Error.CompileError;
@@ -750,7 +754,7 @@ pub const VM = struct {
         return Error.CompileError;
     }
 
-    fn closeUpvaluesAfter(self: *VM, startLocation: *values.Value, diagnostic: *Diagnostic) !void {
+    fn closeUpvaluesAfter(self: *VM, startLocation: *Value, diagnostic: *Diagnostic) !void {
         _ = diagnostic;
         var prev = self.openUpvalues orelse return;
         var cur = self.openUpvalues;

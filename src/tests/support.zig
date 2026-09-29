@@ -20,7 +20,6 @@ pub fn checkOutput(source: []const u8, expected: []const u8) !void {
     try expectCleanExecution(&machine);
 }
 
-
 pub fn checkRuntimeError(source: []const u8) !void {
     const allocator = std.testing.allocator;
     var machine = try vm.VM.initSettings(.{}, allocator);

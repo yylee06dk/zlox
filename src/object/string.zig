@@ -1,8 +1,10 @@
 const std = @import("std");
+const GC = @import("../memory.zig").GarbageCollector;
 
 pub const String = struct {
-    length: u32,
-    hash: u32,
+    gcHeader: GC.GCHeader = undefined,
+    length: u32 = undefined,
+    hash: u32 = undefined,
 
     // Characters trail the struct in the same allocation.
     pub fn getString(self: *const String) []const u8 {

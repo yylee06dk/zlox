@@ -1,6 +1,5 @@
 const std = @import("std");
-const values = @import("values.zig");
-const objects = @import("objects.zig");
+const Value = @import("values.zig").Value;
 
 const Allocator = std.mem.Allocator;
 const baseSize = 8;
@@ -13,8 +12,8 @@ pub const Table = struct {
     baseArray: []?Entry,
 
     const Entry = struct {
-        key: *objects.Object.String,
-        value: values.Value, // 16bytes
+        key: *Value.String,
+        value: Value, // 16bytes
     };
 
     pub fn init(alloc: Allocator) !Table {
@@ -31,7 +30,7 @@ pub const Table = struct {
         alloc.free(self.baseArray);
     }
 
-    pub fn set(self: *Table, key: *objects.Object.String, value: values.Value, alloc: Allocator) !bool {
+    pub fn set(self: *Table, key: *Value.String, value: Value, alloc: Allocator) !bool {
         if (@as(f64, @floatFromInt(self.capacity)) * loadFactor < @as(f64, @floatFromInt(self.count + 1))) {
             try self.growCapacity(alloc);
         }
@@ -47,7 +46,7 @@ pub const Table = struct {
         return isNewKey;
     }
 
-    pub fn get(self: *const Table, key: *objects.Object.String) ?values.Value {
+    pub fn get(self: *const Table, key: *Value.String) ?Value {
         const pos = self.findEntryPos(key);
         if (self.baseArray[pos]) |e| {
             return e.value;
@@ -56,7 +55,7 @@ pub const Table = struct {
         }
     }
 
-    pub fn contains(self: *const Table, string: []const u8, hash: u32) ?*objects.Object.String {
+    pub fn contains(self: *const Table, string: []const u8, hash: u32) ?*Value.String {
         var expectPos = @mod(hash, self.capacity);
         //std.debug.print("\n", .{});
         for (0..self.capacity) |_| {
@@ -75,7 +74,7 @@ pub const Table = struct {
         unreachable;
     }
 
-    fn findEntryPos(self: *const Table, key: *objects.Object.String) usize {
+    fn findEntryPos(self: *const Table, key: *Value.String) usize {
         var expectPos = @mod(key.hash, self.capacity);
 
         for (0..self.capacity) |_| {
