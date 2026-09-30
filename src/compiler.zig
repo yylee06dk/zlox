@@ -831,4 +831,6 @@ pub const Compiler = struct {
         }
         return @intCast(argumentCount);
     }
+
+    fn markCompilerRoots(GC: *memory.GarbageCollector, alloc: Allocator) !void {}
 };

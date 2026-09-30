@@ -100,8 +100,8 @@ pub const GarbageCollector = struct {
     fn collectGarbage(self: *GarbageCollector, alloc: Allocator) void {
         if (self.traceGC) print("---- GC bootup ----\n");
         try self.markRoots(alloc);
-        try self.traceReferences();
-        try self.sweep();
+        try self.traceReferences(alloc);
+        try self.sweep(alloc);
         if (self.traceGC) print("---- GC Ended ----\n");
     }
 
@@ -135,6 +135,8 @@ pub const GarbageCollector = struct {
             const closurePtr = machine.frames[idx].closure;
             try self.markObject(.{ .Closure = closurePtr }, alloc);
         }
+
+        try compile.markCompilerRoots(self, alloc);
     }
 
     fn markValue(self: *GarbageCollector, value: Value, alloc: Allocator) Allocator.Error!void {
@@ -144,6 +146,7 @@ pub const GarbageCollector = struct {
 
     fn markObject(self: *GarbageCollector, value: Value, alloc: Allocator) Allocator.Error!void {
         // Add debugging logs
+        if (self.traceGC) print("  marking: {f}\n", .{value});
         switch (std.meta.activeTag(value)) {
             .String => {
                 const strPtr = value.String;
@@ -186,6 +189,7 @@ pub const GarbageCollector = struct {
             .String => {},
             .Function => {
                 const funcPtr = objectFromHeader(Value.FunctionObject, header);
+                if (self.traceGC) print("  blackening {f}\n", .{funcPtr.*});
                 // mark values in constantSlice
                 var idx = 0;
                 while (idx < funcPtr.chunk.constantSlice.len) : (idx += 1) {
@@ -195,6 +199,7 @@ pub const GarbageCollector = struct {
             },
             .Closure => {
                 const closurePtr = objectFromHeader(Value.ClosureObject, header);
+                if (self.traceGC) print("  blackening {f}\n", .{closurePtr.*});
                 try self.markObject(.{ .Function = closurePtr.baseFunction }, alloc);
                 for (closurePtr.upvalueObjs) |upvalueObj| {
                     try self.markObject(.{ .Upvalue = upvalueObj }, alloc);
@@ -202,9 +207,25 @@ pub const GarbageCollector = struct {
             },
             .Upvalue => {
                 const upvaluePtr = objectFromHeader(Value.UpvalueObject, header);
+                if (self.traceGC) print("  blackening {f}\n", .{upvaluePtr.*});
                 try self.markValue(upvaluePtr.value.*, alloc);
             },
         }
+    }
+
+    fn sweep(self: *GarbageCollector, alloc: Allocator) Allocator.Error!void {
+        const newAllocList: std.ArrayList(Allocation) = .empty;
+        for (self.allocationList.items) |item| {
+            const header = item.payload;
+            const size = item.size;
+            if (header.isMarked) {
+                newAllocList.append(alloc, item) catch unreachable; // Need a way to deal with OOM happening in such cases
+            } else {
+                self.freeObjectFromHeader(header, size, alloc);
+            }
+        }
+        self.allocationList.deinit(alloc);
+        self.allocationList = newAllocList;
     }
 
     // ------- Pretty printing
