@@ -8,6 +8,14 @@ pub const Upvalue = struct {
     closed: values.Value = undefined,
     next: ?*Upvalue = undefined,
 
+    pub fn isClosed(self: *Upvalue) bool {
+        const offset = @offsetOf(@This(), "closed");
+        const startOfStruct = @intFromPtr(self);
+        const posOfValue = @intFromPtr(self.value);
+
+        return posOfValue - startOfStruct == offset;
+    }
+
     pub fn format(
         self: @This(),
         writer: *std.Io.Writer,

@@ -12,7 +12,7 @@ pub const Table = struct {
     baseArray: []?Entry,
 
     const Entry = struct {
-        key: *Value.String,
+        key: *Value.StringObject,
         value: Value, // 16bytes
     };
 
@@ -30,7 +30,7 @@ pub const Table = struct {
         alloc.free(self.baseArray);
     }
 
-    pub fn set(self: *Table, key: *Value.String, value: Value, alloc: Allocator) !bool {
+    pub fn set(self: *Table, key: *Value.StringObject, value: Value, alloc: Allocator) !bool {
         if (@as(f64, @floatFromInt(self.capacity)) * loadFactor < @as(f64, @floatFromInt(self.count + 1))) {
             try self.growCapacity(alloc);
         }
@@ -46,7 +46,7 @@ pub const Table = struct {
         return isNewKey;
     }
 
-    pub fn get(self: *const Table, key: *Value.String) ?Value {
+    pub fn get(self: *const Table, key: *Value.StringObject) ?Value {
         const pos = self.findEntryPos(key);
         if (self.baseArray[pos]) |e| {
             return e.value;
@@ -55,7 +55,7 @@ pub const Table = struct {
         }
     }
 
-    pub fn contains(self: *const Table, string: []const u8, hash: u32) ?*Value.String {
+    pub fn contains(self: *const Table, string: []const u8, hash: u32) ?*Value.StringObject {
         var expectPos = @mod(hash, self.capacity);
         //std.debug.print("\n", .{});
         for (0..self.capacity) |_| {
@@ -74,7 +74,7 @@ pub const Table = struct {
         unreachable;
     }
 
-    fn findEntryPos(self: *const Table, key: *Value.String) usize {
+    fn findEntryPos(self: *const Table, key: *Value.StringObject) usize {
         var expectPos = @mod(key.hash, self.capacity);
 
         for (0..self.capacity) |_| {

@@ -43,8 +43,8 @@ pub const VM = struct {
     stack: vmStack.Stack,
     stringPool: table.Table,
     globals: table.Table,
-    gcAlloc: memory.GarbageCollector = .{},
-    openUpvalues: ?*Value.Upvalue,
+    gcAlloc: memory.GarbageCollector,
+    openUpvalues: ?*Value.UpvalueObject,
 
     fn getCurrentFrame(self: *const VM) *CallFrame {
         return &self.frames[self.frameCount - 1];
@@ -117,7 +117,7 @@ pub const VM = struct {
     };
 
     const CallFrame = struct {
-        closure: *const Value.Closure,
+        closure: *Value.ClosureObject,
         ip: usize,
         basePtr: usize,
     };
@@ -128,6 +128,10 @@ pub const VM = struct {
             .frameCount = 0,
             .debugSettings = debugSettings,
             .stack = try vmStack.Stack.init(alloc),
+            .gcAlloc = .{
+                .stressGC = debugSettings.stressGC,
+                .traceGC = debugSettings.gcStateEnabled(),
+            },
             .stringPool = try table.Table.init(alloc),
             .globals = try table.Table.init(alloc),
             .openUpvalues = null,
@@ -143,14 +147,14 @@ pub const VM = struct {
         alloc.free(self.frames);
     }
 
-    pub fn setTargetFunction(self: *VM, targetFunc: *Value.Function, alloc: Allocator) !void {
+    pub fn setTargetFunction(self: *VM, targetFunc: *Value.FunctionObject, alloc: Allocator) !void {
         // For the repl session, stack needs to be reset
         self.cleanAll();
 
         const closurePtr = try objectStore.createClosure(alloc, &self.gcAlloc, targetFunc);
 
         const basePtr = self.stack.length;
-        try self.stack.push(.{ .closure = closurePtr }); // like calling the script/main function
+        try self.stack.push(.{ .Closure = closurePtr }); // like calling the script/main function
         // No parameters! no need to do additional pushing stuffs
 
         self.frames[self.frameCount] = .{ .closure = closurePtr, .ip = 0, .basePtr = basePtr };
@@ -190,7 +194,7 @@ pub const VM = struct {
                         if (debugVM) {
                             try writer.print("{d} -> {d}", .{ value.asNum(), -value.asNum() });
                         }
-                        try self.safePush(Value{ .number = -value.asNum() }, diagnostics);
+                        try self.safePush(Value{ .Number = -value.asNum() }, diagnostics);
                     } else {
                         diagnostics.setContext(self, "negate operation can only have number operand");
                         return Error.RuntimeError;
@@ -202,7 +206,7 @@ pub const VM = struct {
                         if (debugVM) {
                             try writer.print("{} -> {}", .{ value.asBool(), !value.asBool() });
                         }
-                        try self.safePush(Value{ .boolean = !value.asBool() }, diagnostics);
+                        try self.safePush(Value{ .Boolean = !value.asBool() }, diagnostics);
                     } else {
                         diagnostics.setContext(self, "logic-negate operation can only have boolean operand");
                         return Error.RuntimeError;
@@ -222,7 +226,7 @@ pub const VM = struct {
                     try writer.print("{f}\n", .{std.fmt.alt(value, .formatDisplay)});
                 },
                 .NilOp => {
-                    try self.safePush(Value{ .nil = 1 }, diagnostics);
+                    try self.safePush(Value{ .Nil = 1 }, diagnostics);
                 },
                 .DefineGlobalOp => {
                     const value = try self.safePop(diagnostics);
@@ -367,7 +371,7 @@ pub const VM = struct {
                         closurePtr.upvalueObjs[idx] = upvaluePtr;
                     }
 
-                    try self.safePush(.{ .closure = closurePtr }, diagnostics);
+                    try self.safePush(.{ .Closure = closurePtr }, diagnostics);
                     if (debugVM) try writer.print("Closure Made from {f}", .{funcPtr.*});
                 },
                 .GetUpvalueOp => {
@@ -430,7 +434,7 @@ pub const VM = struct {
             if (debugVM) {
                 try writer.print("{d} {s} {d} -> {}", .{ o.lVal, operator, o.rVal, result });
             }
-            try self.stack.push(Value{ .number = result });
+            try self.stack.push(Value{ .Number = result });
             return;
         }
 
@@ -447,7 +451,7 @@ pub const VM = struct {
             if (debugVM) {
                 try writer.print("{s} {s} {s} -> {s}", .{ o.lVal, operator, o.rVal, strPtr.getString() });
             }
-            try self.stack.push(.{ .string = strPtr });
+            try self.stack.push(.{ .String = strPtr });
             return;
         }
 
@@ -471,7 +475,7 @@ pub const VM = struct {
         switch (opCode) {
             .EqOp => {
                 if (std.meta.activeTag(lVal) != std.meta.activeTag(rVal)) { // two values are different type
-                    try self.safePush(.{ .boolean = false }, diagnostics);
+                    try self.safePush(.{ .Boolean = false }, diagnostics);
                     if (debugVM) {
                         try writer.print("{f} == {f} -> {}", .{ lVal, rVal, false });
                     }
@@ -479,19 +483,19 @@ pub const VM = struct {
                 }
 
                 result = switch (std.meta.activeTag(lVal)) {
-                    .number => lVal.number == rVal.number,
-                    .boolean => lVal.boolean == rVal.boolean,
-                    .nil => true,
-                    .string => lVal.string == rVal.string,
+                    .Number => lVal.Number == rVal.Number,
+                    .Boolean => lVal.Boolean == rVal.Boolean,
+                    .Nil => true,
+                    .String => lVal.String == rVal.String,
                     // Need a rework!
-                    .function => lVal.function == rVal.function,
-                    .closure => lVal.closure == rVal.closure,
-                    .upvalue => lVal.upvalue == rVal.upvalue,
+                    .Function => lVal.Function == rVal.Function,
+                    .Closure => lVal.Closure == rVal.Closure,
+                    .Upvalue => lVal.Upvalue == rVal.Upvalue,
                 };
             },
             .NeqOp => {
                 if (std.meta.activeTag(lVal) != std.meta.activeTag(rVal)) { // two values are different type
-                    try self.safePush(.{ .boolean = true }, diagnostics);
+                    try self.safePush(.{ .Boolean = true }, diagnostics);
                     if (debugVM) {
                         try writer.print("{f} == {f} -> {}", .{ lVal, rVal, true });
                     }
@@ -499,13 +503,13 @@ pub const VM = struct {
                 }
 
                 result = switch (std.meta.activeTag(lVal)) {
-                    .number => lVal.number != rVal.number,
-                    .boolean => lVal.boolean != rVal.boolean,
-                    .nil => false,
-                    .string => lVal.string != rVal.string,
-                    .function => lVal.function != rVal.function,
-                    .closure => lVal.closure != rVal.closure,
-                    .upvalue => lVal.upvalue != rVal.upvalue,
+                    .Number => lVal.Number != rVal.Number,
+                    .Boolean => lVal.Boolean != rVal.Boolean,
+                    .Nil => false,
+                    .String => lVal.String != rVal.String,
+                    .Function => lVal.Function != rVal.Function,
+                    .Closure => lVal.Closure != rVal.Closure,
+                    .Upvalue => lVal.Upvalue != rVal.Upvalue,
                 };
             },
             else => unreachable,
@@ -513,7 +517,7 @@ pub const VM = struct {
         if (debugVM) {
             try writer.print("{f} == {f} -> {}", .{ lVal, rVal, result });
         }
-        try self.safePush(.{ .boolean = result }, diagnostics);
+        try self.safePush(.{ .Boolean = result }, diagnostics);
     }
 
     fn doCompareOp(self: *VM, opCode: bc.opCode, writer: *std.Io.Writer, diagnostics: *Diagnostic) !void {
@@ -539,7 +543,7 @@ pub const VM = struct {
             if (debugVM) {
                 try writer.print("{d} {s} {d} -> {}", .{ o.lVal, operator, o.rVal, result });
             }
-            try self.safePush(.{ .boolean = result }, diagnostics);
+            try self.safePush(.{ .Boolean = result }, diagnostics);
             return;
         }
 
@@ -653,7 +657,7 @@ pub const VM = struct {
         try self.closeUpvaluesAfter(startLocation, diagnostic);
         self.frameCount -= 1;
         self.stack.length = self.frames[self.frameCount].basePtr;
-        const retVal: Value = if (returnVal) |v| v else .{ .nil = 1 };
+        const retVal: Value = if (returnVal) |v| v else .{ .Nil = 1 };
         if (self.frameCount > 0) {
             try self.safePush(retVal, diagnostic);
         }
@@ -664,7 +668,7 @@ pub const VM = struct {
         self.stack.clear();
     }
 
-    fn captureUpvalue(self: *VM, alloc: Allocator, writer: *std.Io.Writer) !*Value.Upvalue {
+    fn captureUpvalue(self: *VM, alloc: Allocator, writer: *std.Io.Writer) !*Value.UpvalueObject {
         const debugVM = self.debugSettings.vmTraceEnabled();
         const isLocal = self.advance() == 0;
         // slot in stack or idx to upvalue slice
@@ -689,7 +693,7 @@ pub const VM = struct {
         return upvaluePtr;
     }
 
-    fn hasOpenUpvalue(self: *VM, location: *Value) ?*Value.Upvalue {
+    fn hasOpenUpvalue(self: *VM, location: *Value) ?*Value.UpvalueObject {
         var cur = self.openUpvalues;
         while (cur != null) {
             const c = cur orelse break;
@@ -702,7 +706,7 @@ pub const VM = struct {
         return null;
     }
 
-    fn insertOpenUpvalue(self: *VM, upvaluePtr: *Value.Upvalue) void {
+    fn insertOpenUpvalue(self: *VM, upvaluePtr: *Value.UpvalueObject) void {
         var prev = self.openUpvalues orelse {
             self.openUpvalues = upvaluePtr;
             return;

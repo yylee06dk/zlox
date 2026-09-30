@@ -54,7 +54,7 @@ fn executeChunk(code: []const u8, constants: []const values.Value, expected: []c
 test "VM boundary: PrintOp consumes one constant and leaves a clean machine" {
     try executeChunk(
         &.{ @intFromEnum(bc.opCode.ConstantOp), 0, @intFromEnum(bc.opCode.PrintOp) },
-        &.{.{ .number = 41 }},
+        &.{.{ .Number = 41 }},
         "41\n",
     );
 }
@@ -66,7 +66,7 @@ test "VM boundary: AddOp consumes two operands and produces one result" {
             @intFromEnum(bc.opCode.ConstantOp), 1,
             @intFromEnum(bc.opCode.AddOp),      @intFromEnum(bc.opCode.PrintOp),
         },
-        &.{ .{ .number = 20 }, .{ .number = 22 } },
+        &.{ .{ .Number = 20 }, .{ .Number = 22 } },
         "42\n",
     );
 }
@@ -86,7 +86,7 @@ test "VM boundary regression: printing a trailing-allocation string uses its ori
     const function = try installScript(
         &machine,
         &.{ @intFromEnum(bc.opCode.ConstantOp), 0, @intFromEnum(bc.opCode.PrintOp) },
-        &.{.{ .string = string }},
+        &.{.{ .String = string }},
         allocator,
     );
     try machine.setTargetFunction(function, allocator);
@@ -113,7 +113,7 @@ test "VM boundary: invalid operand types return a runtime diagnostic" {
             @intFromEnum(bc.opCode.ConstantOp), 1,
             @intFromEnum(bc.opCode.AddOp),
         },
-        &.{ .{ .number = 1 }, .{ .boolean = true } },
+        &.{ .{ .Number = 1 }, .{ .Boolean = true } },
         allocator,
     );
     try machine.setTargetFunction(function, allocator);

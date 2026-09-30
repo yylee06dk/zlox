@@ -31,9 +31,9 @@ test "table boundary: set and get preserve a value" {
     defer machine.deinit(allocator);
 
     const key = try intern(&machine, "answer", allocator);
-    try std.testing.expect(try machine.globals.set(key, .{ .number = 42 }, allocator));
+    try std.testing.expect(try machine.globals.set(key, .{ .Number = 42 }, allocator));
     const actual = machine.globals.get(key) orelse return error.MissingValue;
-    try std.testing.expectEqual(@as(f64, 42), actual.number);
+    try std.testing.expectEqual(@as(f64, 42), actual.Number);
 }
 
 test "table regression: replacing a key changes its value without changing count" {
@@ -42,12 +42,12 @@ test "table regression: replacing a key changes its value without changing count
     defer machine.deinit(allocator);
 
     const key = try intern(&machine, "same", allocator);
-    try std.testing.expect(try machine.globals.set(key, .{ .number = 1 }, allocator));
-    try std.testing.expect(!try machine.globals.set(key, .{ .number = 2 }, allocator));
+    try std.testing.expect(try machine.globals.set(key, .{ .Number = 1 }, allocator));
+    try std.testing.expect(!try machine.globals.set(key, .{ .Number = 2 }, allocator));
 
     try std.testing.expectEqual(@as(usize, 1), machine.globals.count);
     const actual = machine.globals.get(key) orelse return error.MissingValue;
-    try std.testing.expectEqual(@as(f64, 2), actual.number);
+    try std.testing.expectEqual(@as(f64, 2), actual.Number);
 }
 
 test "table regression: growth preserves every entry and does not retain a freed array" {
@@ -65,14 +65,14 @@ test "table regression: growth preserves every entry and does not retain a freed
 
     for (names, 0..) |name, index| {
         keys[index] = try intern(&machine, name, allocator);
-        _ = try machine.globals.set(keys[index], .{ .number = @floatFromInt(index) }, allocator);
+        _ = try machine.globals.set(keys[index], .{ .Number = @floatFromInt(index) }, allocator);
     }
 
     try std.testing.expect(machine.globals.capacity >= 32);
     try std.testing.expectEqual(names.len, machine.globals.count);
     for (keys, 0..) |key, index| {
         const actual = machine.globals.get(key) orelse return error.MissingValueAfterGrowth;
-        try std.testing.expectEqual(@as(f64, @floatFromInt(index)), actual.number);
+        try std.testing.expectEqual(@as(f64, @floatFromInt(index)), actual.Number);
     }
 }
 

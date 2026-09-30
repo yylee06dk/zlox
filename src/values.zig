@@ -4,158 +4,158 @@ const _Function = @import("object/function.zig").Function;
 const _Closure = @import("object/closure.zig").Closure;
 const _Upvalue = @import("object/upvalue.zig").Upvalue;
 
-pub const valueType = enum {
-    number,
-    boolean,
-    nil,
-    string,
-    function,
-    closure,
-    upvalue,
+pub const ValueType = enum {
+    Number,
+    Boolean,
+    Nil,
+    String,
+    Function,
+    Closure,
+    Upvalue,
 };
 
-pub const Value = union(valueType) {
-    number: f64,
-    boolean: bool,
-    nil: u1,
-    string: *String,
-    function: *Function,
-    closure: *Closure,
-    upvalue: *Upvalue,
+pub const Value = union(ValueType) {
+    Number: f64,
+    Boolean: bool,
+    Nil: u1,
+    String: *StringObject,
+    Function: *FunctionObject,
+    Closure: *ClosureObject,
+    Upvalue: *UpvalueObject,
 
-    pub const String = _String;
-    pub const Function = _Function;
-    pub const Closure = _Closure;
-    pub const Upvalue = _Upvalue;
+    pub const StringObject = _String;
+    pub const FunctionObject = _Function;
+    pub const ClosureObject = _Closure;
+    pub const UpvalueObject = _Upvalue;
 
     pub fn isNum(self: Value) bool {
         return switch (self) {
-            .number => true,
+            .Number => true,
             else => false,
         };
     }
 
     pub fn isBool(self: Value) bool {
         return switch (self) {
-            .boolean => true,
+            .Boolean => true,
             else => false,
         };
     }
 
     pub fn isNil(self: Value) bool {
         return switch (self) {
-            .nil => true,
+            .Nil => true,
             else => false,
         };
     }
 
     pub fn isObj(self: Value) bool {
         return switch (self) {
-            .string, .function, .closure => true,
+            .String, .Function, .Closure, .Upvalue => true,
             else => false,
         };
     }
 
     pub fn isString(self: Value) bool {
         return switch (self) {
-            .string => true,
+            .String => true,
             else => false,
         };
     }
 
     pub fn isFunction(self: Value) bool {
         return switch (self) {
-            .function => true,
+            .Function => true,
             else => false,
         };
     }
 
     pub fn isClosure(self: Value) bool {
         return switch (self) {
-            .closure => true,
+            .Closure => true,
             else => false,
         };
     }
 
     pub fn isUpvalue(self: Value) bool {
         return switch (self) {
-            .upvalue => true,
+            .Upvalue => true,
             else => false,
         };
     }
 
     pub fn asNum(self: Value) f64 {
-        return self.number;
+        return self.Number;
     }
 
     pub fn asBool(self: Value) bool {
-        return self.boolean;
+        return self.Boolean;
     }
 
-    pub fn asString(self: Value) ?*String {
+    pub fn asString(self: Value) ?*StringObject {
         return switch (self) {
-            .string => |string| string,
+            .String => |string| string,
             else => null,
         };
     }
 
-    pub fn asFunction(self: Value) ?*Function {
+    pub fn asFunction(self: Value) ?*FunctionObject {
         return switch (self) {
-            .function => |function| function,
+            .Function => |function| function,
             else => null,
         };
     }
 
-    pub fn asClosure(self: Value) ?*Closure {
+    pub fn asClosure(self: Value) ?*ClosureObject {
         return switch (self) {
-            .closure => |closure| closure,
+            .Closure => |closure| closure,
             else => null,
         };
     }
 
-    pub fn asUpvalue(self: Value) ?*Upvalue {
+    pub fn asUpvalue(self: Value) ?*UpvalueObject {
         return switch (self) {
-            .upvalue => |upvalue| upvalue,
+            .Upvalue => |upvalue| upvalue,
             else => null,
         };
     }
 
     fn typeToString(self: Value) []const u8 {
         return switch (self) {
-            .boolean => "boolean",
-            .number => "number",
-            .nil => "nil",
-            .string => "string",
-            .function => "function",
-            .closure => "closure",
-            .upvalue => "upvalue",
+            .Boolean => "boolean",
+            .Number => "number",
+            .Nil => "nil",
+            .String => "string",
+            .Function => "function",
+            .Closure => "closure",
+            .Upvalue => "upvalue",
         };
     }
 
     pub fn formatDisplay(self: Value, writer: *std.Io.Writer) !void {
         switch (self) {
-            .boolean => |b| try writer.print("{}", .{b}),
-            .number => |n| try writer.print("{d}", .{n}),
-            .nil => try writer.print("<nil>", .{}),
-            .string => |s| try writer.print("{s}", .{s.getString()}),
-            .function => |f| try writer.print("{f}", .{f.*}),
-            .closure => |c| try writer.print("{f}", .{c.*}),
-            .upvalue => |u| try writer.print("{f}", .{u.*}),
+            .Boolean => |b| try writer.print("{}", .{b}),
+            .Number => |n| try writer.print("{d}", .{n}),
+            .Nil => try writer.print("<nil>", .{}),
+            .String => |s| try writer.print("{s}", .{s.getString()}),
+            .Function => |f| try writer.print("{f}", .{f.*}),
+            .Closure => |c| try writer.print("{f}", .{c.*}),
+            .Upvalue => |u| try writer.print("{f}", .{u.*}),
         }
     }
 
     pub fn format(self: Value, writer: *std.Io.Writer) !void {
         try writer.print("[type: {s}, value: ", .{self.typeToString()});
         switch (self) {
-            .boolean => |b| try writer.print("{}]", .{b}),
-            .number => |n| try writer.print("{}]", .{n}),
-            .nil => try writer.print("<nil>]", .{}),
-            .string => |s| {
+            .Boolean => |b| try writer.print("{}]", .{b}),
+            .Number => |n| try writer.print("{}]", .{n}),
+            .Nil => try writer.print("<nil>]", .{}),
+            .String => |s| {
                 try writer.print("{s}]", .{s.getString()});
             },
-            .function => |f| try writer.print("{f}]", .{f.*}),
-            .closure => |c| try writer.print("{f}]", .{c.*}),
-            .upvalue => |u| try writer.print("{f}]", .{u.*}),
+            .Function => |f| try writer.print("{f}]", .{f.*}),
+            .Closure => |c| try writer.print("{f}]", .{c.*}),
+            .Upvalue => |u| try writer.print("{f}]", .{u.*}),
         }
     }
 };
