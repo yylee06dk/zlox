@@ -6,7 +6,7 @@ const String = @import("string.zig").String;
 pub const Function = struct {
     gcHeader: GC.GCHeader = undefined,
     chunk: bci.Chunk = undefined,
-    name: ?*const String = undefined,
+    name: ?*String = undefined,
     upvalueCount: u8 = undefined,
     arity: u8 = undefined,
 

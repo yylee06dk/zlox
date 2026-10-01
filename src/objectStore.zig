@@ -59,7 +59,7 @@ pub fn createEmptyFunction(alloc: Allocator, gcAlloc: *GC) Allocator.Error!*Valu
     return funcPtr;
 }
 
-pub fn initFunctionInplace(self: *Value.FunctionObject, alloc: Allocator, gcAlloc: *GC, name: ?*const Value.StringObject, chunk: bci.Chunk, arity: u8, upvalueCount: u8) Allocator.Error!void {
+pub fn initFunctionInplace(self: *Value.FunctionObject, alloc: Allocator, gcAlloc: *GC, name: ?*Value.StringObject, chunk: bci.Chunk, arity: u8, upvalueCount: u8) Allocator.Error!void {
     const chunkTrueSize = chunk.codeSlice.len * @sizeOf(u8) + std.mem.sliceAsBytes(chunk.constantSlice).len + chunk.lineSlice.len * @sizeOf(usize);
 
     // Keep it safe while init
@@ -100,7 +100,6 @@ pub fn createUpvalue(alloc: Allocator, gcAlloc: *GC, location: *Value) Allocator
     try gcAlloc.addAllocation(&upvaluePtr.gcHeader, @sizeOf(Value.UpvalueObject), alloc);
     upvaluePtr.gcHeader.isMarked = false;
     upvaluePtr.value = location;
-    upvaluePtr.closed = null;
     upvaluePtr.next = null;
     return upvaluePtr;
 }

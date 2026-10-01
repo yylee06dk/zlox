@@ -77,7 +77,7 @@ pub const Compiler = struct {
     targetVM: *vm.VM, // We write info needed at runtime that's resolved at compile time
     compileType: CompileType,
     arity: u8,
-    name: ?*const Value.StringObject, //borrowed
+    name: ?*Value.StringObject, //borrowed
     enclosing: ?*Compiler,
     upvalues: *[maxUpvalueCount]Upvalue,
     upvalueCount: u8,
@@ -111,7 +111,7 @@ pub const Compiler = struct {
         isLocal: bool,
     };
 
-    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, compileType: CompileType, arity: u8, name: ?*const Value.StringObject, enclosing: ?*Compiler, alloc: Allocator) !Compiler {
+    pub fn init(source: []const u8, tokenList: []tokens.Token, targetVM: *vm.VM, compileType: CompileType, arity: u8, name: ?*Value.StringObject, enclosing: ?*Compiler, alloc: Allocator) !Compiler {
         var temp: Compiler = .{
             .source = source,
             .tokenList = tokenList,
@@ -831,6 +831,4 @@ pub const Compiler = struct {
         }
         return @intCast(argumentCount);
     }
-
-    fn markCompilerRoots(GC: *memory.GarbageCollector, alloc: Allocator) !void {}
 };

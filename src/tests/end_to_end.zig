@@ -4,7 +4,7 @@ const vm = @import("../vm.zig");
 
 fn checkEndToEndSucceed(src: []const u8, expect: []const u8) !void {
     const allocator = std.testing.allocator;
-    var machine = try vm.VM.initSettings(.{}, allocator);
+    var machine = try vm.VM.initSettings(.{ .stressGC = true }, allocator);
     defer machine.deinit(allocator);
 
     var output: std.Io.Writer.Allocating = .init(allocator);

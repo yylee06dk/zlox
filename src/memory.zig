@@ -9,6 +9,7 @@ pub const GarbageCollector = struct {
     allocationList: std.ArrayList(Allocation) = .empty,
     greyStack: std.ArrayList(*GCHeader) = .empty,
     curAllocSize: usize = 0,
+    nextThreshold: usize = 1024 * 1024,
     traceGC: bool = false,
     stressGC: bool = false,
 
@@ -38,13 +39,15 @@ pub const GarbageCollector = struct {
         self.greyStack.deinit(alloc);
     }
 
-    pub fn addAllocation(self: *GarbageCollector, item: *GCHeader, sizeChange: usize, alloc: Allocator, machine: *vm.VM) Allocator.Error!void {
+    pub fn addAllocation(self: *GarbageCollector, item: *GCHeader, sizeChange: usize, alloc: Allocator) Allocator.Error!void {
         if (!self.contains(item)) {
             try self.allocationList.append(alloc, .{ .payload = item, .size = sizeChange });
         }
         self.curAllocSize += sizeChange;
         // Later on check if it got over the limit
-        _ = machine;
+        if (self.stressGC or self.curAllocSize > self.nextThreshold) {
+            try self.collectGarbage(alloc);
+        }
     }
 
     pub fn freeAll(self: *GarbageCollector, alloc: Allocator) void {
@@ -97,12 +100,12 @@ pub const GarbageCollector = struct {
     }
 
     // GC related function
-    fn collectGarbage(self: *GarbageCollector, alloc: Allocator) void {
-        if (self.traceGC) print("---- GC bootup ----\n");
+    fn collectGarbage(self: *GarbageCollector, alloc: Allocator) !void {
+        if (self.traceGC) print("---- GC bootup ----\n", .{});
         try self.markRoots(alloc);
         try self.traceReferences(alloc);
         try self.sweep(alloc);
-        if (self.traceGC) print("---- GC Ended ----\n");
+        if (self.traceGC) print("---- GC Ended ----\n", .{});
     }
 
     fn markRoots(self: *GarbageCollector, alloc: Allocator) !void {
@@ -135,8 +138,6 @@ pub const GarbageCollector = struct {
             const closurePtr = machine.frames[idx].closure;
             try self.markObject(.{ .Closure = closurePtr }, alloc);
         }
-
-        try compile.markCompilerRoots(self, alloc);
     }
 
     fn markValue(self: *GarbageCollector, value: Value, alloc: Allocator) Allocator.Error!void {
@@ -172,6 +173,7 @@ pub const GarbageCollector = struct {
                 upvaluePtr.gcHeader.isMarked = true;
                 try self.greyStack.append(alloc, &upvaluePtr.gcHeader);
             },
+            .Number, .Boolean, .Nil => unreachable,
         }
     }
 
@@ -191,7 +193,7 @@ pub const GarbageCollector = struct {
                 const funcPtr = objectFromHeader(Value.FunctionObject, header);
                 if (self.traceGC) print("  blackening {f}\n", .{funcPtr.*});
                 // mark values in constantSlice
-                var idx = 0;
+                var idx: usize = 0;
                 while (idx < funcPtr.chunk.constantSlice.len) : (idx += 1) {
                     try self.markValue(funcPtr.chunk.constantSlice[idx], alloc);
                 }
@@ -214,7 +216,7 @@ pub const GarbageCollector = struct {
     }
 
     fn sweep(self: *GarbageCollector, alloc: Allocator) Allocator.Error!void {
-        const newAllocList: std.ArrayList(Allocation) = .empty;
+        var newAllocList: std.ArrayList(Allocation) = .empty;
         for (self.allocationList.items) |item| {
             const header = item.payload;
             const size = item.size;
