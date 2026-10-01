@@ -127,9 +127,8 @@ pub const Compiler = struct {
             .upvalues = @ptrCast(try alloc.alloc(Upvalue, maxUpvalueCount)),
             .upvalueCount = 0,
         };
-        // Reserve first slot of (call frame's) stack with function/method name
-        const funcName = if (name) |n| n else try objectStore.makeString("", 0, &targetVM.gcAlloc, &targetVM.stringPool, alloc);
-        temp.resolver.locals[0] = .{ .depth = 0, .name = funcName, .isCaptured = false };
+        // Reserve first slot of (call frame's) stack with function/method
+        temp.resolver.locals[0] = .{ .depth = 0, .name = null, .isCaptured = false };
         temp.resolver.localCount += 1;
         return temp;
     }
@@ -160,9 +159,9 @@ pub const Compiler = struct {
         // Implicit nil return for both script and function
         try self.writeBytes(alloc, @intFromEnum(bc.opCode.NilOp), @intFromEnum(bc.opCode.ReturnOp));
         // The ownership goes to the caller
-        const funcPtr = try objectStore.createEmptyFunction(alloc, &self.targetVM.gcAlloc);
+        const funcPtr = try objectStore.createEmptyFunction(alloc, &self.targetVM.gcAlloc, self);
         const chunk = try self.output.toOwnedChunk(alloc);
-        try objectStore.initFunctionInplace(funcPtr, alloc, &self.targetVM.gcAlloc, self.name, chunk, self.arity, self.upvalueCount);
+        try objectStore.initFunctionInplace(funcPtr, alloc, &self.targetVM.gcAlloc, self.name, chunk, self.arity, self.upvalueCount, self);
         return funcPtr;
     }
 
@@ -172,7 +171,7 @@ pub const Compiler = struct {
         locals: []Local, // of length 256 (MAX_U8)
 
         const Local = struct {
-            name: *const Value.StringObject,
+            name: ?*Value.StringObject,
             depth: usize,
             isCaptured: bool,
         };
@@ -218,7 +217,7 @@ pub const Compiler = struct {
     }
 
     pub fn declareVariable(self: *Compiler, name: *Value.StringObject, diagnostic: *Diagnostic) !void {
-        if (self.resolver.localCount == std.math.maxInt(u8) + 1) {
+        if (self.resolver.localCount == std.math.maxInt(u8)) {
             diagnostic.setContext(self.previous, "Too many local variables declared(max of 256) at");
             return Error.ParseFailed;
         }
@@ -228,7 +227,8 @@ pub const Compiler = struct {
             idx -= 1;
             const local = self.resolver.locals[idx];
             if (local.depth < self.resolver.scopeDepth) break;
-            if (local.name == name) {
+            const curName = if (local.name) |n| n else continue;
+            if (curName == name) {
                 diagnostic.setContext(self.previous, "Redeclare of variable in same scope at");
                 return Error.ParseFailed;
             }
@@ -247,8 +247,8 @@ pub const Compiler = struct {
         // Search for the given name in locals list
         while (idx > 0) { // start from end to meet the innermost declaration(shadowing)
             idx -= 1;
-            const local = self.resolver.locals[idx];
-            if (local.name == name) { // pointer comparison via string interning
+            const curName = if (self.resolver.locals[idx].name) |n| n else continue;
+            if (curName == name) { // pointer comparison via string interning
                 return idx;
             }
         }
@@ -624,7 +624,7 @@ pub const Compiler = struct {
     fn string(self: *Compiler, alloc: Allocator, diagnostic: *Diagnostic, canAssign: bool) Allocator.Error!void {
         _ = canAssign;
         _ = diagnostic;
-        const strPtr = try objectStore.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const strPtr = try objectStore.makeString(self.source[self.previous.start..], self.previous.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, self, alloc);
         const value: Value = .{ .String = strPtr };
         try self.writeConstant(alloc, value);
     }
@@ -781,7 +781,7 @@ pub const Compiler = struct {
 
     // Variable parsing related functions
     fn parseNamedVariable(self: *Compiler, nameToken: *tokens.Token, isDeclaration: bool, alloc: Allocator, diagnostic: *Diagnostic) !struct { *Value.StringObject, usize } {
-        const nameString = try objectStore.makeString(self.source[nameToken.start..], nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+        const nameString = try objectStore.makeString(self.source[nameToken.start..], nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, self, alloc);
         // Add the variable name to constant list
         const addr = try self.output.addConstant(alloc, .{ .String = nameString });
         // Add the variable itself to resolver
@@ -798,7 +798,7 @@ pub const Compiler = struct {
             // parse parameter name
             try self.consume(tokens.TokenType.Identifier, self.previous, diagnostic, "Expect parameter name after");
             const nameToken = self.previous;
-            const nameString = try objectStore.makeString(self.source[nameToken.start..], nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, alloc);
+            const nameString = try objectStore.makeString(self.source[nameToken.start..], nameToken.length, &self.targetVM.gcAlloc, &self.targetVM.stringPool, self, alloc);
             try self.declareVariable(nameString, diagnostic);
             arity += 1;
             if (arity > 255) {
@@ -830,5 +830,29 @@ pub const Compiler = struct {
             }
         }
         return @intCast(argumentCount);
+    }
+
+    pub fn markCompilerRoots(self: *Compiler, GC: *memory.GarbageCollector, alloc: Allocator) Allocator.Error!void {
+        var cur: ?*Compiler = self;
+
+        while (cur != null) {
+            const c = cur orelse unreachable;
+
+            // Mark constants
+            var idx: usize = 0;
+            while (idx < c.output.constantList.items.len) : (idx += 1) {
+                const value = c.output.constantList.items[idx];
+                try GC.markValue(value, alloc);
+            }
+
+            // Mark strings in local representations at resolvers
+            idx = 0;
+            while (idx < self.resolver.localCount) : (idx += 1) {
+                const local = self.resolver.locals[idx];
+                if (local.name) |n| try GC.markObject(.{ .String = n }, alloc);
+            }
+
+            cur = c.enclosing;
+        }
     }
 };

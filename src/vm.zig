@@ -447,7 +447,7 @@ pub const VM = struct {
 
             const concatString = try std.mem.concat(alloc, u8, &.{ o.lVal, o.rVal });
             defer alloc.free(concatString);
-            const strPtr = try objectStore.makeString(concatString, concatString.len, &self.gcAlloc, &self.stringPool, alloc);
+            const strPtr = try objectStore.makeString(concatString, concatString.len, &self.gcAlloc, &self.stringPool, null, alloc);
             if (debugVM) {
                 try writer.print("{s} {s} {s} -> {s}", .{ o.lVal, operator, o.rVal, strPtr.getString() });
             }

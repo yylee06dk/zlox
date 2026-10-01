@@ -1,5 +1,6 @@
 const std = @import("std");
 const Value = @import("values.zig").Value;
+const Compiler = @import("compiler.zig").Compiler;
 const vm = @import("vm.zig");
 const Allocator = std.mem.Allocator;
 
@@ -39,14 +40,14 @@ pub const GarbageCollector = struct {
         self.greyStack.deinit(alloc);
     }
 
-    pub fn addAllocation(self: *GarbageCollector, item: *GCHeader, sizeChange: usize, alloc: Allocator) Allocator.Error!void {
+    pub fn addAllocation(self: *GarbageCollector, compiler: ?*Compiler, item: *GCHeader, sizeChange: usize, alloc: Allocator) Allocator.Error!void {
         if (!self.contains(item)) {
             try self.allocationList.append(alloc, .{ .payload = item, .size = sizeChange });
         }
         self.curAllocSize += sizeChange;
         // Later on check if it got over the limit
         if (self.stressGC or self.curAllocSize > self.nextThreshold) {
-            try self.collectGarbage(alloc);
+            try self.collectGarbage(compiler, alloc);
         }
     }
 
@@ -100,15 +101,22 @@ pub const GarbageCollector = struct {
     }
 
     // GC related function
-    fn collectGarbage(self: *GarbageCollector, alloc: Allocator) !void {
+    fn collectGarbage(self: *GarbageCollector, compiler: ?*Compiler, alloc: Allocator) !void {
         if (self.traceGC) print("---- GC bootup ----\n", .{});
-        try self.markRoots(alloc);
+        try self.markRoots(compiler, alloc);
         try self.traceReferences(alloc);
         try self.sweep(alloc);
         if (self.traceGC) print("---- GC Ended ----\n", .{});
+        self.nextThreshold = self.curAllocSize * 2;
+        if (self.traceGC) {
+            print("GC AfterMath: nextThreshold: {d}bytes, curAlloc: {d}bytes\n", .{ self.nextThreshold, self.curAllocSize });
+            print("{f}", .{self});
+            print("\n---- ---- ----\n\n\n\n", .{});
+        }
     }
 
-    fn markRoots(self: *GarbageCollector, alloc: Allocator) !void {
+    fn markRoots(self: *GarbageCollector, compiler: ?*Compiler, alloc: Allocator) !void {
+        if (self.traceGC) print("---- Marking Roots ----\n", .{});
         const machine: *vm.VM = @fieldParentPtr("gcAlloc", self);
         // Mark stack-existent objects
         var idx: usize = 0;
@@ -138,14 +146,17 @@ pub const GarbageCollector = struct {
             const closurePtr = machine.frames[idx].closure;
             try self.markObject(.{ .Closure = closurePtr }, alloc);
         }
+
+        if (compiler) |c| try c.markCompilerRoots(self, alloc);
+        if (self.traceGC) print("---- Marking Roots Done ----\n", .{});
     }
 
-    fn markValue(self: *GarbageCollector, value: Value, alloc: Allocator) Allocator.Error!void {
+    pub fn markValue(self: *GarbageCollector, value: Value, alloc: Allocator) Allocator.Error!void {
         if (!value.isObj()) return;
         try self.markObject(value, alloc);
     }
 
-    fn markObject(self: *GarbageCollector, value: Value, alloc: Allocator) Allocator.Error!void {
+    pub fn markObject(self: *GarbageCollector, value: Value, alloc: Allocator) Allocator.Error!void {
         // Add debugging logs
         if (self.traceGC) print("  marking: {f}\n", .{value});
         switch (std.meta.activeTag(value)) {
@@ -221,6 +232,7 @@ pub const GarbageCollector = struct {
             const header = item.payload;
             const size = item.size;
             if (header.isMarked) {
+                item.payload.isMarked = false;
                 newAllocList.append(alloc, item) catch unreachable; // Need a way to deal with OOM happening in such cases
             } else {
                 self.freeObjectFromHeader(header, size, alloc);

@@ -130,7 +130,7 @@ pub fn build(b: *std.Build) void {
 
     const run_debug_step = b.step("run-debug", "Run the app with debug mode");
     const run_debug_cmd = b.addRunArtifact(exe);
-    run_debug_cmd.addArg("-d");
+    run_debug_cmd.addArg("-ds");
     run_debug_cmd.step.dependOn(b.getInstallStep());
     run_debug_step.dependOn(&run_debug_cmd.step);
 
