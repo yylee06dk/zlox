@@ -6,9 +6,10 @@ const Value = @import("values.zig").Value;
 const objectStore = @import("objectStore.zig");
 const memory = @import("memory.zig");
 const vm = @import("vm.zig");
+const stack = @import("vmStack.zig");
 
 const Allocator = std.mem.Allocator;
-const Errors = Allocator.Error || Compiler.Error || std.Io.Writer.Error;
+const Errors = Allocator.Error || Compiler.Error || std.Io.Writer.Error || stack.StackError;
 const ruleFunc = *const fn (*Compiler, Allocator, *Compiler.Diagnostic, bool) Errors!void;
 const maxUpvalueCount = 256;
 
@@ -159,9 +160,8 @@ pub const Compiler = struct {
         // Implicit nil return for both script and function
         try self.writeBytes(alloc, @intFromEnum(bc.opCode.NilOp), @intFromEnum(bc.opCode.ReturnOp));
         // The ownership goes to the caller
-        const funcPtr = try objectStore.createEmptyFunction(alloc, &self.targetVM.gcAlloc, self);
         const chunk = try self.output.toOwnedChunk(alloc);
-        try objectStore.initFunctionInplace(funcPtr, alloc, &self.targetVM.gcAlloc, self.name, chunk, self.arity, self.upvalueCount, self);
+        const funcPtr = try objectStore.createFunction(alloc, &self.targetVM.gcAlloc, self.name, chunk, self.arity, self.upvalueCount, self);
         return funcPtr;
     }
 

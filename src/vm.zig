@@ -376,16 +376,24 @@ pub const VM = struct {
                 },
                 .GetUpvalueOp => {
                     const index = self.advance();
-                    const location = self.getCurrentFrame().closure.upvalueObjs[index].value;
+                    const upvaluePtr = self.getCurrentFrame().closure.upvalueObjs[index] orelse {
+                        diagnostics.setContext(self, "Closure have null upvalue after init");
+                        return Error.CompileError;
+                    };
+                    const location = upvaluePtr.value;
                     try self.safePush(location.*, diagnostics);
                     if (debugVM) try writer.print("index: {d}, value: {*}-{f}", .{ index, location, location.* });
                 },
                 .SetUpvalueOp => {
                     const index = self.advance();
                     const newVal = try self.safePeek(diagnostics, 0);
-                    const oldValLocation = self.getCurrentFrame().closure.upvalueObjs[index].value;
+                    const upvaluePtr = self.getCurrentFrame().closure.upvalueObjs[index] orelse {
+                        diagnostics.setContext(self, "Closure have null upvalue after init");
+                        return Error.CompileError;
+                    };
+                    const oldValLocation = upvaluePtr.value;
                     if (debugVM) try writer.print("index: {d}, value: {*} : {f} -> {f}", .{ index, oldValLocation, oldValLocation.*, newVal });
-                    self.getCurrentFrame().closure.upvalueObjs[index].value.* = newVal;
+                    upvaluePtr.value.* = newVal;
                 },
                 .PopOp => {
                     const value = try self.safePop(diagnostics);
@@ -668,13 +676,14 @@ pub const VM = struct {
         self.stack.clear();
     }
 
-    fn captureUpvalue(self: *VM, alloc: Allocator, writer: *std.Io.Writer) !*Value.UpvalueObject {
+    pub fn captureUpvalue(self: *VM, alloc: Allocator, writer: *std.Io.Writer) !*Value.UpvalueObject {
         const debugVM = self.debugSettings.vmTraceEnabled();
         const isLocal = self.advance() == 0;
         // slot in stack or idx to upvalue slice
         const locationInfo = self.advance();
 
-        const location = if (isLocal) &self.stack.stackArray[self.getCurrentFrame().basePtr + locationInfo] else self.getCurrentFrame().closure.upvalueObjs[locationInfo].value;
+        // Need to later on add diagnostics when closure is corrupted and latter value is actually null
+        const location = if (isLocal) &self.stack.stackArray[self.getCurrentFrame().basePtr + locationInfo] else (self.getCurrentFrame().closure.upvalueObjs[locationInfo] orelse unreachable).value;
         if (debugVM) {
             const temp = if (isLocal) "local" else "upvalue";
             //print("Debug: {*}\n", .{location});

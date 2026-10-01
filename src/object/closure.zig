@@ -8,7 +8,8 @@ const Upvalue = @import("upvalue.zig").Upvalue;
 pub const Closure = struct {
     gcHeader: GC.GCHeader = undefined,
     baseFunction: *Function = undefined,
-    upvalueObjs: []*Upvalue = undefined,
+    upvalueObjs: []?*Upvalue = undefined,
+    // While structuring this closure, the slice may have null values.
 
     fn getName(self: *const Closure) []const u8 {
         if (self.baseFunction.name) |name| {

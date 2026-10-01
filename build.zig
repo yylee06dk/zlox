@@ -147,6 +147,7 @@ pub fn build(b: *std.Build) void {
     // Run the scratch program directly with the fast native backend.
     const run_test_step = b.step("run-test", "Run test.txt");
     const run_test_cmd = b.addRunArtifact(exe);
+    run_test_cmd.addArg("-ds");
     run_test_cmd.addFileArg(b.path("test.txt"));
     run_test_cmd.step.dependOn(b.getInstallStep());
     run_test_step.dependOn(&run_test_cmd.step);

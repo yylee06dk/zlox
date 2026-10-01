@@ -24,6 +24,27 @@ pub const GarbageCollector = struct {
             Closure,
             Upvalue,
         };
+
+        pub fn format(self: *@This(), writer: *std.Io.Writer) !void {
+            switch (self.kind) {
+                .String => {
+                    const strPtr = objectFromHeader(Value.StringObject, self);
+                    try writer.print("{*} -> {s}", .{ strPtr, strPtr.getString() });
+                },
+                .Function => {
+                    const funcPtr = objectFromHeader(Value.FunctionObject, self);
+                    try writer.print("{*} -> {f}", .{ funcPtr, funcPtr.* });
+                },
+                .Closure => {
+                    const closurePtr = objectFromHeader(Value.ClosureObject, self);
+                    try writer.print("{*} -> {f}", .{ closurePtr, closurePtr.* });
+                },
+                .Upvalue => {
+                    const upvaluePtr = objectFromHeader(Value.UpvalueObject, self);
+                    try writer.print("{*} -> {f}", .{ upvaluePtr, upvaluePtr.* });
+                },
+            }
+        }
     };
 
     fn objectFromHeader(comptime T: type, header: *GCHeader) *T {
@@ -110,7 +131,7 @@ pub const GarbageCollector = struct {
         self.nextThreshold = self.curAllocSize * 2;
         if (self.traceGC) {
             print("GC AfterMath: nextThreshold: {d}bytes, curAlloc: {d}bytes\n", .{ self.nextThreshold, self.curAllocSize });
-            print("{f}", .{self});
+            print("{f}", .{self.*});
             print("\n---- ---- ----\n\n\n\n", .{});
         }
     }
@@ -157,35 +178,40 @@ pub const GarbageCollector = struct {
     }
 
     pub fn markObject(self: *GarbageCollector, value: Value, alloc: Allocator) Allocator.Error!void {
+        var header: *GCHeader = undefined;
         // Add debugging logs
-        if (self.traceGC) print("  marking: {f}\n", .{value});
         switch (std.meta.activeTag(value)) {
             .String => {
                 const strPtr = value.String;
+                header = &strPtr.gcHeader;
                 if (strPtr.gcHeader.isMarked) return;
                 strPtr.gcHeader.isMarked = true;
                 try self.greyStack.append(alloc, &strPtr.gcHeader);
             },
             .Function => {
                 const funcPtr = value.Function;
+                header = &funcPtr.gcHeader;
                 if (funcPtr.gcHeader.isMarked) return;
                 funcPtr.gcHeader.isMarked = true;
                 try self.greyStack.append(alloc, &funcPtr.gcHeader);
             },
             .Closure => {
                 const closurePtr = value.Closure;
+                header = &closurePtr.gcHeader;
                 if (closurePtr.gcHeader.isMarked) return;
                 closurePtr.gcHeader.isMarked = true;
                 try self.greyStack.append(alloc, &closurePtr.gcHeader);
             },
             .Upvalue => {
                 const upvaluePtr = value.Upvalue;
+                header = &upvaluePtr.gcHeader;
                 if (upvaluePtr.gcHeader.isMarked) return;
                 upvaluePtr.gcHeader.isMarked = true;
                 try self.greyStack.append(alloc, &upvaluePtr.gcHeader);
             },
             .Number, .Boolean, .Nil => unreachable,
         }
+        if (self.traceGC) print("    mark: {f}\n", .{header});
     }
 
     fn traceReferences(self: *GarbageCollector, alloc: Allocator) !void {
@@ -198,11 +224,11 @@ pub const GarbageCollector = struct {
     }
 
     fn blackenObjectFromHeader(self: *GarbageCollector, header: *GCHeader, alloc: Allocator) !void {
+        print("    blacken: {f}\n", .{header});
         switch (header.kind) {
             .String => {},
             .Function => {
                 const funcPtr = objectFromHeader(Value.FunctionObject, header);
-                if (self.traceGC) print("  blackening {f}\n", .{funcPtr.*});
                 // mark values in constantSlice
                 var idx: usize = 0;
                 while (idx < funcPtr.chunk.constantSlice.len) : (idx += 1) {
@@ -212,21 +238,20 @@ pub const GarbageCollector = struct {
             },
             .Closure => {
                 const closurePtr = objectFromHeader(Value.ClosureObject, header);
-                if (self.traceGC) print("  blackening {f}\n", .{closurePtr.*});
                 try self.markObject(.{ .Function = closurePtr.baseFunction }, alloc);
                 for (closurePtr.upvalueObjs) |upvalueObj| {
-                    try self.markObject(.{ .Upvalue = upvalueObj }, alloc);
+                    if (upvalueObj) |u| try self.markObject(.{ .Upvalue = u }, alloc);
                 }
             },
             .Upvalue => {
                 const upvaluePtr = objectFromHeader(Value.UpvalueObject, header);
-                if (self.traceGC) print("  blackening {f}\n", .{upvaluePtr.*});
                 try self.markValue(upvaluePtr.value.*, alloc);
             },
         }
     }
 
     fn sweep(self: *GarbageCollector, alloc: Allocator) Allocator.Error!void {
+        print("---- Sweep started ----\n", .{});
         var newAllocList: std.ArrayList(Allocation) = .empty;
         for (self.allocationList.items) |item| {
             const header = item.payload;
@@ -235,11 +260,13 @@ pub const GarbageCollector = struct {
                 item.payload.isMarked = false;
                 newAllocList.append(alloc, item) catch unreachable; // Need a way to deal with OOM happening in such cases
             } else {
+                print("    free: {f}\n", .{header});
                 self.freeObjectFromHeader(header, size, alloc);
             }
         }
         self.allocationList.deinit(alloc);
         self.allocationList = newAllocList;
+        print("---- Sweep ended ----\n", .{});
     }
 
     // ------- Pretty printing
@@ -250,24 +277,7 @@ pub const GarbageCollector = struct {
         for (self.allocationList.items) |item| {
             const header = item.payload;
             const size = item.size;
-            switch (header.kind) {
-                .String => {
-                    const strPtr = objectFromHeader(Value.StringObject, header);
-                    try writer.print("String: {s} | size: {d}\n", .{ strPtr.getString(), size });
-                },
-                .Function => {
-                    const funcPtr = objectFromHeader(Value.FunctionObject, header);
-                    try writer.print("Function: {f} | size: {d}\n", .{ funcPtr.*, size });
-                },
-                .Closure => {
-                    const closurePtr = objectFromHeader(Value.ClosureObject, header);
-                    try writer.print("Closure: {f} | size: {d}\n", .{ closurePtr.*, size });
-                },
-                .Upvalue => {
-                    const upvaluePtr = objectFromHeader(Value.UpvalueObject, header);
-                    try writer.print("Upvalue: {f} | size: {d}\n", .{ upvaluePtr.*, size });
-                },
-            }
+            try writer.print("{f} | size: {d}\n", .{ header, size });
         }
     }
 };
