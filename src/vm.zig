@@ -364,6 +364,8 @@ pub const VM = struct {
                     };
 
                     var closurePtr = try objectStore.createClosure(alloc, &self.gcAlloc, funcPtr);
+                    // Push it before upvalue init to prevent closure from getting freed
+                    try self.safePush(.{ .Closure = closurePtr }, diagnostics);
                     if (debugVM) try writer.print("\n", .{});
                     for (0..funcPtr.upvalueCount) |idx| {
                         // Capture happens from the perspective of parent-context
@@ -371,7 +373,6 @@ pub const VM = struct {
                         closurePtr.upvalueObjs[idx] = upvaluePtr;
                     }
 
-                    try self.safePush(.{ .Closure = closurePtr }, diagnostics);
                     if (debugVM) try writer.print("Closure Made from {f}", .{funcPtr.*});
                 },
                 .GetUpvalueOp => {

@@ -73,20 +73,24 @@ pub fn createFunction(alloc: Allocator, gcAlloc: *GC, name: ?*Value.StringObject
 
 pub fn createClosure(alloc: Allocator, gcAlloc: *GC, baseFunction: *Value.FunctionObject) !*Value.ClosureObject {
     var closurePtr = try alloc.create(Value.ClosureObject);
-    closurePtr.gcHeader = .{
-        .kind = GC.GCHeader.ObjKind.Closure,
-        .isMarked = false,
-    };
     errdefer alloc.destroy(closurePtr);
-    closurePtr.baseFunction = baseFunction;
-    closurePtr.upvalueObjs = try alloc.alloc(?*Value.UpvalueObject, baseFunction.upvalueCount);
+    const upvalueObjs = try alloc.alloc(?*Value.UpvalueObject, baseFunction.upvalueCount);
+    errdefer alloc.free(upvalueObjs);
     // Zero init
     var idx: usize = 0;
     while (idx < baseFunction.upvalueCount) : (idx += 1) {
-        closurePtr.upvalueObjs[idx] = null;
+        upvalueObjs[idx] = null;
     }
 
-    const totalSize = @sizeOf(Value.ClosureObject) + @sizeOf(*Value.UpvalueObject) * baseFunction.upvalueCount;
+    closurePtr.* = .{
+        .gcHeader = .{
+            .kind = GC.GCHeader.ObjKind.Closure,
+            .isMarked = false,
+        },
+        .baseFunction = baseFunction,
+        .upvalueObjs = upvalueObjs,
+    };
+    const totalSize = @sizeOf(Value.ClosureObject) + @sizeOf(?*Value.UpvalueObject) * baseFunction.upvalueCount;
 
     const machine: *vm.VM = @fieldParentPtr("gcAlloc", gcAlloc);
     try machine.stack.push(.{ .Closure = closurePtr });

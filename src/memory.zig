@@ -123,7 +123,7 @@ pub const GarbageCollector = struct {
 
     // GC related function
     fn collectGarbage(self: *GarbageCollector, compiler: ?*Compiler, alloc: Allocator) !void {
-        if (self.traceGC) print("---- GC bootup ----\n", .{});
+        if (self.traceGC) print("\n\n---- GC bootup ----\n", .{});
         try self.markRoots(compiler, alloc);
         try self.traceReferences(alloc);
         try self.sweep(alloc);
@@ -131,7 +131,7 @@ pub const GarbageCollector = struct {
         self.nextThreshold = self.curAllocSize * 2;
         if (self.traceGC) {
             print("GC AfterMath: nextThreshold: {d}bytes, curAlloc: {d}bytes\n", .{ self.nextThreshold, self.curAllocSize });
-            print("{f}", .{self.*});
+            print("    {f}", .{self.*});
             print("\n---- ---- ----\n\n\n\n", .{});
         }
     }
@@ -224,7 +224,7 @@ pub const GarbageCollector = struct {
     }
 
     fn blackenObjectFromHeader(self: *GarbageCollector, header: *GCHeader, alloc: Allocator) !void {
-        print("    blacken: {f}\n", .{header});
+        if (self.traceGC) print("    blacken: {f}\n", .{header});
         switch (header.kind) {
             .String => {},
             .Function => {
@@ -251,7 +251,7 @@ pub const GarbageCollector = struct {
     }
 
     fn sweep(self: *GarbageCollector, alloc: Allocator) Allocator.Error!void {
-        print("---- Sweep started ----\n", .{});
+        if (self.traceGC) print("---- Sweep started ----\n", .{});
         var newAllocList: std.ArrayList(Allocation) = .empty;
         for (self.allocationList.items) |item| {
             const header = item.payload;
@@ -260,13 +260,13 @@ pub const GarbageCollector = struct {
                 item.payload.isMarked = false;
                 newAllocList.append(alloc, item) catch unreachable; // Need a way to deal with OOM happening in such cases
             } else {
-                print("    free: {f}\n", .{header});
+                if (self.traceGC) print("\x1b[91m    free: {f}\x1b[0m\n", .{header});
                 self.freeObjectFromHeader(header, size, alloc);
             }
         }
         self.allocationList.deinit(alloc);
         self.allocationList = newAllocList;
-        print("---- Sweep ended ----\n", .{});
+        if (self.traceGC) print("---- Sweep ended ----\n", .{});
     }
 
     // ------- Pretty printing
