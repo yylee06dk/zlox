@@ -8,7 +8,7 @@ A zig built bytecode interpreter of lox from the book [Crafting Interpreters](ht
 #### Usage of binary
 `zlox` will shoot up a REPL.
 `zlox {file}` will run the file as input lox code.
-> Flags
+##### Flags
 `-b` shows bytecode.
 `-v` shows vm trace
 `-g` shows gc log
