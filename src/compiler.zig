@@ -847,8 +847,8 @@ pub const Compiler = struct {
 
             // Mark strings in local representations at resolvers
             idx = 0;
-            while (idx < self.resolver.localCount) : (idx += 1) {
-                const local = self.resolver.locals[idx];
+            while (idx < c.resolver.localCount) : (idx += 1) {
+                const local = c.resolver.locals[idx];
                 if (local.name) |n| try GC.markObject(.{ .String = n }, alloc);
             }
 

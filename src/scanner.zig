@@ -63,7 +63,7 @@ pub const Scanner = struct {
             const token = self.scanToken(&diagnostic) catch {
                 try diagnostics.append(alloc, diagnostic);
                 continue; // Error recorded, on to the next one!
-            }; // Skipping this one
+            } orelse continue; // Skipping this one
 
             try tokenList.append(alloc, token);
         }
@@ -74,14 +74,20 @@ pub const Scanner = struct {
         return try tokenList.toOwnedSlice(alloc);
     }
 
-    pub fn scanToken(self: *Scanner, diagnostic: *Diagnostic) ScanError!tokens.Token {
+    pub fn scanToken(self: *Scanner, diagnostic: *Diagnostic) ScanError!?tokens.Token {
         defer self.skipWhiteSpace();
         const c = self.advance(); // this is okay since we come here after checking isAtEnd
         switch (c) {
             '+' => return self.makeToken(1, tokens.TokenType.Plus),
             '-' => return self.makeToken(1, tokens.TokenType.Minus),
             '*' => return self.makeToken(1, tokens.TokenType.Star),
-            '/' => return self.makeToken(1, tokens.TokenType.Slash),
+            '/' => {
+                if (self.match('/')) {
+                    while (self.advance() != '\n') {}
+                    return null;
+                }
+                return self.makeToken(1, tokens.TokenType.Slash);
+            },
             '(' => return self.makeToken(1, tokens.TokenType.LeftParen),
             ')' => return self.makeToken(1, tokens.TokenType.RightParen),
             '{' => return self.makeToken(1, tokens.TokenType.LeftBrace),
@@ -108,13 +114,16 @@ pub const Scanner = struct {
             },
             else => {
                 if (ascii.isDigit(c)) {
-                    return self.number();
+                    const numToken = self.number();
+                    return numToken;
                 }
                 if (c == '"') {
-                    return self.string(diagnostic);
+                    const strToken = try self.string(diagnostic);
+                    return strToken;
                 }
                 if (ascii.isAlphabetic(c)) {
-                    return self.identifier();
+                    const identifierToken = self.identifier();
+                    return identifierToken;
                 }
                 diagnostic.setContext(self, ScanError.UnknownCharacter, 1);
                 return ScanError.UnknownCharacter;

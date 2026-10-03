@@ -676,6 +676,48 @@ test "ETE: returned function can be called immediately" {
     , "42\n");
 }
 
+test "ETE: compiler roots survive nested function compilation" {
+    try checkEndToEndSucceed(
+        \\fun makeJournal(title) {
+        \\    var text = "=== " + title;
+        \\
+        \\    fun record(entry) {
+        \\        text = text + "\n- ";
+        \\        text = text + entry;
+        \\        return text;
+        \\    }
+        \\
+        \\    return record;
+        \\}
+        \\
+        \\fun makeWorker(prefix) {
+        \\    fun process(payload) {
+        \\        var message = prefix + payload;
+        \\        return message + "!";
+        \\    }
+        \\
+        \\    return process;
+        \\}
+        \\
+        \\var journal = makeJournal("batch processing report");
+        \\
+        \\for (var batch = 0; batch < 20; batch = batch + 1) {
+        \\    var worker = makeWorker("worker: ");
+        \\    var result = worker("processed batch");
+        \\    journal(result);
+        \\
+        \\    var scratch = "temporary " + "buffer";
+        \\    scratch = scratch + " discarded";
+        \\}
+        \\
+        \\print journal("all batches complete");
+    ,
+        "=== batch processing report" ++
+            ("\\n- worker: processed batch!" ** 20) ++
+            "\\n- all batches complete\n",
+    );
+}
+
 test "ETE runtime error: reading an undefined global" {
     try checkEndToEndRuntimeErr("print missing;");
 }

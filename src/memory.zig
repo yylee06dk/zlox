@@ -123,7 +123,10 @@ pub const GarbageCollector = struct {
 
     // GC related function
     fn collectGarbage(self: *GarbageCollector, compiler: ?*Compiler, alloc: Allocator) !void {
-        if (self.traceGC) print("\n\n---- GC bootup ----\n", .{});
+        if (self.traceGC) {
+            const isCompiler = if (compiler) |_| "Compiler" else "VM";
+            print("\n\n---- GC bootup from {s} ----\n", .{isCompiler});
+        }
         try self.markRoots(compiler, alloc);
         try self.traceReferences(alloc);
         try self.sweep(alloc);
@@ -139,11 +142,13 @@ pub const GarbageCollector = struct {
     fn markRoots(self: *GarbageCollector, compiler: ?*Compiler, alloc: Allocator) !void {
         if (self.traceGC) print("---- Marking Roots ----\n", .{});
         const machine: *vm.VM = @fieldParentPtr("gcAlloc", self);
+        if (self.traceGC) print("  ---- Marking VM Stack ----\n", .{});
         // Mark stack-existent objects
         var idx: usize = 0;
         while (idx < machine.stack.length) : (idx += 1) {
             try self.markValue(machine.stack.stackArray[idx], alloc);
         }
+        if (self.traceGC) print("\n  ---- Marking globals ----\n", .{});
         // Mark globals-existent objects
         idx = 0;
         while (idx < machine.globals.capacity) : (idx += 1) {
@@ -153,6 +158,7 @@ pub const GarbageCollector = struct {
                 try self.markValue(entry.value, alloc);
             }
         }
+        if (self.traceGC) print("\n  ---- Marking open upvalues ----\n", .{});
         // Mark openUpvalues
         var cur = machine.openUpvalues;
         while (cur != null) {
@@ -161,6 +167,7 @@ pub const GarbageCollector = struct {
             cur = c.next;
         }
 
+        if (self.traceGC) print("\n  ---- Marking call frame closures ----\n", .{});
         // Mark call frame-living closures
         idx = 0;
         while (idx < machine.frameCount) : (idx += 1) {
@@ -168,6 +175,7 @@ pub const GarbageCollector = struct {
             try self.markObject(.{ .Closure = closurePtr }, alloc);
         }
 
+        if (self.traceGC) print("\n  ---- (Optional)Marking compiler roots ----\n", .{});
         if (compiler) |c| try c.markCompilerRoots(self, alloc);
         if (self.traceGC) print("---- Marking Roots Done ----\n", .{});
     }
