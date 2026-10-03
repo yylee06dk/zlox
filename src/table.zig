@@ -12,7 +12,7 @@ pub const Table = struct {
     baseArray: []?Entry,
 
     const Entry = struct {
-        key: *Value.StringObject,
+        key: ?*Value.StringObject, // Null means deleted entry. Non-existent entry(key) is expressed via ?Entry type.
         value: Value, // 16bytes
     };
 
@@ -46,6 +46,13 @@ pub const Table = struct {
         return isNewKey;
     }
 
+    pub fn delete(self: *Table, key: *Value.StringObject) void {
+        if (self.get(key) == null) return;
+        const pos = self.findEntryPos(key); // Must exist.
+        self.baseArray[pos].?.key = null; // Deleted - tombstone
+        return;
+    }
+
     pub fn get(self: *const Table, key: *Value.StringObject) ?Value {
         const pos = self.findEntryPos(key);
         if (self.baseArray[pos]) |e| {
@@ -63,11 +70,13 @@ pub const Table = struct {
             //std.debug.print("{d}\n", .{expectPos});
             const entry = self.baseArray[expectPos];
             //std.debug.print("E:{?}\n", .{entry});
-            if (entry == null) return null;
-            const e = if (entry) |e| e else unreachable;
-            if (hash == e.key.hash and e.key.length == string.len) {
-                if (std.mem.eql(u8, e.key.getString(), string)) {
-                    return e.key;
+            const curEntry = entry orelse return null;
+
+            // We keep searching when we meet a deleted entry
+            const curKey = curEntry.key orelse continue;
+            if (hash == curKey.hash and curKey.length == string.len) {
+                if (std.mem.eql(u8, curKey.getString(), string)) {
+                    return curKey;
                 }
             }
         }
@@ -81,7 +90,8 @@ pub const Table = struct {
             expectPos = @mod(expectPos + 1, self.capacity);
             const entry = self.baseArray[expectPos];
             if (entry) |e| {
-                if (e.key == key) break;
+                if (e.key == null) continue;
+                if (e.key.? == key) break;
                 continue;
             }
             break;
@@ -99,17 +109,19 @@ pub const Table = struct {
 
         var tempTable: Table = .{
             .capacity = newCapacity,
-            .count = self.count,
+            .count = 0,
             .baseArray = ptrNew,
         };
 
         for (0..self.capacity) |idx| {
             const oldEntry = self.baseArray[idx] orelse continue;
-            _ = try tempTable.set(oldEntry.key, oldEntry.value, alloc);
+            const curKey = oldEntry.key orelse continue; // No need to re-init deleted entries when resizing
+            _ = try tempTable.set(curKey, oldEntry.value, alloc);
         }
 
         self.baseArray = ptrNew;
         self.capacity = newCapacity;
+        self.count = tempTable.count;
     }
 };
 

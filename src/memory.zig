@@ -129,12 +129,13 @@ pub const GarbageCollector = struct {
         }
         try self.markRoots(compiler, alloc);
         try self.traceReferences(alloc);
+        try self.tableDeleteReferences();
         try self.sweep(alloc);
         if (self.traceGC) print("---- GC Ended ----\n", .{});
         self.nextThreshold = self.curAllocSize * 2;
         if (self.traceGC) {
             print("GC AfterMath: nextThreshold: {d}bytes, curAlloc: {d}bytes\n", .{ self.nextThreshold, self.curAllocSize });
-            print("    {f}", .{self.*});
+            print("==\n{f}\n==", .{self.*});
             print("\n---- ---- ----\n\n\n\n", .{});
         }
     }
@@ -152,11 +153,10 @@ pub const GarbageCollector = struct {
         // Mark globals-existent objects
         idx = 0;
         while (idx < machine.globals.capacity) : (idx += 1) {
-            const cur = machine.globals.baseArray[idx];
-            if (cur) |entry| {
-                try self.markObject(.{ .String = entry.key }, alloc);
-                try self.markValue(entry.value, alloc);
-            }
+            const cur = machine.globals.baseArray[idx] orelse continue;
+            const curKey = cur.key orelse continue;
+            try self.markObject(.{ .String = curKey }, alloc);
+            try self.markValue(cur.value, alloc);
         }
         if (self.traceGC) print("\n  ---- Marking open upvalues ----\n", .{});
         // Mark openUpvalues
@@ -255,6 +255,21 @@ pub const GarbageCollector = struct {
                 const upvaluePtr = objectFromHeader(Value.UpvalueObject, header);
                 try self.markValue(upvaluePtr.value.*, alloc);
             },
+        }
+    }
+
+    fn tableDeleteReferences(self: *GarbageCollector) Allocator.Error!void {
+        const machine: *vm.VM = @fieldParentPtr("gcAlloc", self);
+        const strPool = &machine.stringPool;
+
+        for (strPool.baseArray) |entry| {
+            const curEntry = entry orelse continue;
+            const curKey = curEntry.key orelse continue;
+
+            if (curKey.gcHeader.isMarked == false) {
+                strPool.delete(curKey); // Actually we did all the work to find the entry position and refinding it... hmm...
+                // Actually deleting the string happens at sweep stage. We just clean up pointers early to avoid dangling pointers
+            }
         }
     }
 

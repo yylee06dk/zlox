@@ -718,6 +718,72 @@ test "ETE: compiler roots survive nested function compilation" {
     );
 }
 
+test "ETE GC: weak interned string can be collected and recreated repeatedly" {
+    try checkEndToEndSucceed(
+        \\fun discardTarget() {
+        \\    var temporary = "weak-" + "target";
+        \\}
+        \\discardTarget();
+        \\var sweepOne = "force-" + "sweep-one";
+        \\discardTarget();
+        \\var sweepTwo = "force-" + "sweep-two";
+        \\print "weak-" + "target";
+    , "weak-target\n");
+}
+
+test "ETE GC: reachable interned string survives weak pool cleanup" {
+    try checkEndToEndSucceed(
+        \\var survivor = "keep-" + "alive";
+        \\fun makeGarbage() {
+        \\    var temporary = "throw-" + "away";
+        \\}
+        \\makeGarbage();
+        \\var sweep = "force-" + "collection";
+        \\print survivor == ("keep-" + "alive");
+        \\print survivor;
+    , "true\nkeep-alive\n");
+}
+
+test "ETE GC: string-pool lookup crosses a deleted collision tombstone" {
+    try checkEndToEndSucceed(
+        // "probe-35" and "probe-40" have equal FNV-1a hashes modulo 256,
+        // so they share a probe chain at every table capacity used here.
+        \\var survivor;
+        \\fun installCollision() {
+        \\    var discarded = "probe-" + "35";
+        \\    survivor = "probe-" + "40";
+        \\}
+        \\installCollision();
+        \\var sweep = "force-" + "tombstone";
+        \\print survivor == ("probe-" + "40");
+        \\print survivor;
+    , "true\nprobe-40\n");
+}
+
+test "ETE GC: weak string tombstones survive bulk churn and table growth" {
+    try checkEndToEndSucceed(
+        \\fun churn() {
+        \\    var dead00 = "dead-" + "00";
+        \\    var dead01 = "dead-" + "01";
+        \\    var dead02 = "dead-" + "02";
+        \\    var dead03 = "dead-" + "03";
+        \\    var dead04 = "dead-" + "04";
+        \\    var dead05 = "dead-" + "05";
+        \\    var dead06 = "dead-" + "06";
+        \\    var dead07 = "dead-" + "07";
+        \\    var dead08 = "dead-" + "08";
+        \\    var dead09 = "dead-" + "09";
+        \\    var dead10 = "dead-" + "10";
+        \\    var dead11 = "dead-" + "11";
+        \\}
+        \\churn();
+        \\var sweep = "force-" + "bulk-sweep";
+        \\churn();
+        \\var result = "after-" + "growth";
+        \\print result;
+    , "after-growth\n");
+}
+
 test "ETE runtime error: reading an undefined global" {
     try checkEndToEndRuntimeErr("print missing;");
 }
