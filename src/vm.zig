@@ -122,8 +122,8 @@ pub const VM = struct {
         basePtr: usize,
     };
 
-    pub fn initSettings(debugSettings: DebugSettings, alloc: Allocator) Allocator.Error!VM {
-        return .{
+    pub fn initSettings(debugSettings: DebugSettings, alloc: Allocator) (Allocator.Error || vmStack.StackError)!VM {
+        var machine: VM = .{
             .frames = try alloc.alloc(CallFrame, maxFrameCount),
             .frameCount = 0,
             .debugSettings = debugSettings,
@@ -136,6 +136,9 @@ pub const VM = struct {
             .globals = try table.Table.init(alloc),
             .openUpvalues = null,
         };
+
+        try machine.defineNative("clock", 0, VM.clockNative, alloc);
+        return machine;
     }
 
     pub fn deinit(self: *VM, alloc: Allocator) void {
@@ -328,7 +331,27 @@ pub const VM = struct {
                 .CallOp => {
                     const argCount = self.advance();
                     const basePtr = self.stack.length - argCount - 1;
-                    const closurePtr = (try self.safePeek(diagnostics, argCount)).asClosure() orelse {
+                    const callable = try self.safePeek(diagnostics, argCount);
+                    if (callable.isNative()) {
+                        const nativePtr = callable.asNative().?;
+                        // Arity check.
+                        if (nativePtr.arity != argCount) {
+                            diagnostics.setContext(self, "Function call has different arity");
+                            return Error.RuntimeError;
+                        }
+                        const args = self.stack.stackArray[self.stack.length - argCount .. self.stack.length];
+                        const result = nativePtr.nativeFn(args);
+
+                        for (0..argCount + 1) |_| {
+                            // +1 is needed to also clean the function itself(nativePtr)
+                            _ = try self.safePop(diagnostics);
+                        }
+                        try self.safePush(result, diagnostics);
+                        continue;
+                    }
+
+                    // Calling closure logic
+                    const closurePtr = callable.asClosure() orelse {
                         diagnostics.setContext(self, "Uncallable value given <show it>");
                         return Error.RuntimeError;
                     };
@@ -500,6 +523,7 @@ pub const VM = struct {
                     .Function => lVal.Function == rVal.Function,
                     .Closure => lVal.Closure == rVal.Closure,
                     .Upvalue => lVal.Upvalue == rVal.Upvalue,
+                    .Native => lVal.Native == rVal.Native,
                 };
             },
             .NeqOp => {
@@ -519,6 +543,7 @@ pub const VM = struct {
                     .Function => lVal.Function != rVal.Function,
                     .Closure => lVal.Closure != rVal.Closure,
                     .Upvalue => lVal.Upvalue != rVal.Upvalue,
+                    .Native => lVal.Native != rVal.Native,
                 };
             },
             else => unreachable,
@@ -790,5 +815,25 @@ pub const VM = struct {
             cur = c.next;
         }
         return;
+    }
+
+    fn defineNative(self: *VM, name: []const u8, arity: u8, function: Value.NativeObject.NativeFn, alloc: Allocator) !void {
+        const strPtr = try objectStore.makeString(name, name.len, &self.gcAlloc, &self.stringPool, null, alloc);
+        try self.stack.push(.{ .String = strPtr });
+        const nativePtr = try objectStore.createNative(alloc, &self.gcAlloc, function, arity);
+        _ = self.stack.pop();
+
+        _ = try self.globals.set(strPtr, .{ .Native = nativePtr }, alloc);
+    }
+
+    fn clockNative(args: []const Value) Value {
+        std.debug.assert(args.len == 0);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const now = std.Io.Clock.cpu_process.now(io);
+        const seconds = @as(f64, @floatFromInt(now.nanoseconds)) /
+            @as(f64, std.time.ns_per_s);
+
+        return .{ .Number = seconds };
     }
 };

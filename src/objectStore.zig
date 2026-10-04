@@ -114,3 +114,22 @@ pub fn createUpvalue(alloc: Allocator, gcAlloc: *GC, location: *Value) !*Value.U
     _ = machine.stack.pop();
     return upvaluePtr;
 }
+
+pub fn createNative(alloc: Allocator, gcAlloc: *GC, function: Value.NativeObject.NativeFn, arity: u8) !*Value.NativeObject {
+    var nativePtr = try alloc.create(Value.NativeObject);
+    errdefer alloc.destroy(nativePtr);
+    nativePtr.* = .{
+        .gcHeader = .{
+            .kind = .Native,
+            .isMarked = false,
+        },
+        .nativeFn = function,
+        .arity = arity,
+    };
+
+    const machine: *vm.VM = @fieldParentPtr("gcAlloc", gcAlloc);
+    try machine.stack.push(.{ .Native = nativePtr });
+    try gcAlloc.addAllocation(null, &nativePtr.gcHeader, @sizeOf(Value.NativeObject), alloc);
+    _ = machine.stack.pop();
+    return nativePtr;
+}

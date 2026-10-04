@@ -23,6 +23,7 @@ pub const GarbageCollector = struct {
             Function,
             Closure,
             Upvalue,
+            Native,
         };
 
         pub fn format(self: *@This(), writer: *std.Io.Writer) !void {
@@ -42,6 +43,10 @@ pub const GarbageCollector = struct {
                 .Upvalue => {
                     const upvaluePtr = objectFromHeader(Value.UpvalueObject, self);
                     try writer.print("{*} -> {f}", .{ upvaluePtr, upvaluePtr.* });
+                },
+                .Native => {
+                    const nativePtr = objectFromHeader(Value.NativeObject, self);
+                    try writer.print("{*} -> {f}", .{ nativePtr, nativePtr.* });
                 },
             }
         }
@@ -109,6 +114,11 @@ pub const GarbageCollector = struct {
             .Upvalue => {
                 const upvaluePtr = objectFromHeader(Value.UpvalueObject, header);
                 alloc.destroy(upvaluePtr);
+                self.curAllocSize -= size;
+            },
+            .Native => {
+                const nativePtr = objectFromHeader(Value.NativeObject, header);
+                alloc.destroy(nativePtr);
                 self.curAllocSize -= size;
             },
         }
@@ -217,6 +227,13 @@ pub const GarbageCollector = struct {
                 upvaluePtr.gcHeader.isMarked = true;
                 try self.greyStack.append(alloc, &upvaluePtr.gcHeader);
             },
+            .Native => {
+                const nativePtr = value.Native;
+                header = &nativePtr.gcHeader;
+                if (nativePtr.gcHeader.isMarked) return;
+                nativePtr.gcHeader.isMarked = true;
+                try self.greyStack.append(alloc, &nativePtr.gcHeader);
+            },
             .Number, .Boolean, .Nil => unreachable,
         }
         if (self.traceGC) print("    mark: {f}\n", .{header});
@@ -234,7 +251,7 @@ pub const GarbageCollector = struct {
     fn blackenObjectFromHeader(self: *GarbageCollector, header: *GCHeader, alloc: Allocator) !void {
         if (self.traceGC) print("    blacken: {f}\n", .{header});
         switch (header.kind) {
-            .String => {},
+            .String, .Native => {},
             .Function => {
                 const funcPtr = objectFromHeader(Value.FunctionObject, header);
                 // mark values in constantSlice

@@ -3,6 +3,7 @@ const _String = @import("object/string.zig").String;
 const _Function = @import("object/function.zig").Function;
 const _Closure = @import("object/closure.zig").Closure;
 const _Upvalue = @import("object/upvalue.zig").Upvalue;
+const _Native = @import("object/native.zig").Native;
 
 pub const ValueType = enum {
     Number,
@@ -12,6 +13,7 @@ pub const ValueType = enum {
     Function,
     Closure,
     Upvalue,
+    Native,
 };
 
 pub const Value = union(ValueType) {
@@ -22,11 +24,13 @@ pub const Value = union(ValueType) {
     Function: *FunctionObject,
     Closure: *ClosureObject,
     Upvalue: *UpvalueObject,
+    Native: *NativeObject,
 
     pub const StringObject = _String;
     pub const FunctionObject = _Function;
     pub const ClosureObject = _Closure;
     pub const UpvalueObject = _Upvalue;
+    pub const NativeObject = _Native;
 
     pub fn isNum(self: Value) bool {
         return switch (self) {
@@ -51,7 +55,7 @@ pub const Value = union(ValueType) {
 
     pub fn isObj(self: Value) bool {
         return switch (self) {
-            .String, .Function, .Closure, .Upvalue => true,
+            .String, .Function, .Closure, .Upvalue, .Native => true,
             else => false,
         };
     }
@@ -80,6 +84,13 @@ pub const Value = union(ValueType) {
     pub fn isUpvalue(self: Value) bool {
         return switch (self) {
             .Upvalue => true,
+            else => false,
+        };
+    }
+
+    pub fn isNative(self: Value) bool {
+        return switch (self) {
+            .Native => true,
             else => false,
         };
     }
@@ -120,6 +131,13 @@ pub const Value = union(ValueType) {
         };
     }
 
+    pub fn asNative(self: Value) ?*NativeObject {
+        return switch (self) {
+            .Native => |native| native,
+            else => null,
+        };
+    }
+
     fn typeToString(self: Value) []const u8 {
         return switch (self) {
             .Boolean => "boolean",
@@ -129,6 +147,7 @@ pub const Value = union(ValueType) {
             .Function => "function",
             .Closure => "closure",
             .Upvalue => "upvalue",
+            .Native => "native",
         };
     }
 
@@ -141,6 +160,7 @@ pub const Value = union(ValueType) {
             .Function => |f| try writer.print("{f}", .{f.*}),
             .Closure => |c| try writer.print("{f}", .{c.*}),
             .Upvalue => |u| try writer.print("{f}", .{u.*}),
+            .Native => |n| try writer.print("{f}", .{n.*}),
         }
     }
 
@@ -156,6 +176,7 @@ pub const Value = union(ValueType) {
             .Function => |f| try writer.print("{f}]", .{f.*}),
             .Closure => |c| try writer.print("{f}]", .{c.*}),
             .Upvalue => |u| try writer.print("{f}]", .{u.*}),
+            .Native => |n| try writer.print("{f}]", .{n.*}),
         }
     }
 };
