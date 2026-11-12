@@ -1,15 +1,16 @@
 const std = @import("std");
-const bc = @import("bytecode.zig");
-const bcInfo = @import("bytecodeInfo.zig");
-const vmStack = @import("vmStack.zig");
-const Value = @import("values.zig").Value;
-const memory = @import("memory.zig");
-const objectStore = @import("objectStore.zig");
-const table = @import("table.zig");
-
 const print = std.debug.print;
 const t = std.debug.print;
 const Allocator = std.mem.Allocator;
+
+const bc = @import("bytecode.zig");
+const bcInfo = @import("bytecodeInfo.zig");
+const memory = @import("memory.zig");
+const objectStore = @import("objectStore.zig");
+const table = @import("table.zig");
+const Value = @import("values.zig").Value;
+const vmStack = @import("vmStack.zig");
+
 const maxFrameCount = 64;
 
 pub const VM = struct {
